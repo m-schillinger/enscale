@@ -12,6 +12,8 @@ Implementation of EnScale.
 - generate samples from EnScale with `eval_multi_step_coarse_from_super.py`, example call in `run_eval.sh`.
 - these can then be used in the evaluation scripts.
 
+For more details, see `readme_enscale.md` in the folder `enscale`.
+
 ## Folder benchmarks
 
 Simple baselines from the paper (analogues, EasyUQ).
