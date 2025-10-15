@@ -5,6 +5,8 @@ from modules_loc_variant import *
 from utils import *
 from data import *
 import argparse
+import pdb
+import time
 
 class args:
     # num_layers = [6, 6, 6, 6, 6]
@@ -19,6 +21,8 @@ class args:
     out_acts = [None, None, None, None, None]
     model_types = ["dense", "nicolai", "nicolai", "nicolai", "nicolai"]
     one_hot_options = [None, "argument", "argument", "argument", "argument"]
+    one_hot_flags = [False, False, False, False, False]
+
     conv_dims = [None, None, None, None, None]
     kernel_sizes = [16, 8, 4, 2, 1]
     vars_as_channels = [False, False, False, False, False]
@@ -170,10 +174,16 @@ def get_model(args):
         elif args.model_types[i] == "nicolai":
             assert i > 0
             print(in_dim_model, out_dim_model)
+            
+            if args.one_hot_in_super:
+                num_classes = 8
+            else:
+                num_classes = 1
             model = RectUpsampleWithResiduals(int(128 / args.kernel_sizes[i-1]),
                             int(128 / args.kernel_sizes[i]),
                             n_features=len(args.variables),
-                            num_classes=1, # TO DO: change num classes
+                            num_classes=num_classes, 
+                            num_classes_resid=1,
                             num_neighbors_ups=args.num_neighbors_ups[i],
                             num_neighbors_res=args.num_neighbors_res[i],
                             map_dim=args.latent_dims[i],
@@ -200,7 +210,7 @@ def get_model(args):
                 model = loaded_models[i],
                 vars_as_channels = args.vars_as_channels[i],
                 use_one_hot = args.one_hot_flags[i],
-                noise_dim = args.noise_dims[i],
+                noise_dim = args.noise_dims[i] * int(128 / args.kernel_sizes[i])**2, # latter part is the number of pixels for which we need noise
                 one_hot_option = args.one_hot_options[i],
             )
             for i in range(len(loaded_models))
@@ -245,7 +255,8 @@ def get_model(args):
                 model = loaded_models[i],
                 vars_as_channels = args.vars_as_channels[i],
                 use_one_hot = args.one_hot_flags[i],
-                noise_dim = args.noise_dims[i],
+                noise_dim = args.noise_dims[i] * int(128 / args.kernel_sizes[i])**2,
+                one_hot_option = args.one_hot_options[i],
             )
             for i in range(1, len(loaded_models))
             ]
@@ -339,6 +350,8 @@ if __name__ == '__main__':
         
         if args.one_hot_in_super:
             args.one_hot_flags = [False, True, True, True, True]
+        else:
+            args.one_hot_flags = [False, False, False, False, False]
         
         # specifications for nicolai layers
         num_neighbors_ups = [None, 9, 9, 9, 9]
@@ -377,14 +390,29 @@ if __name__ == '__main__':
             args.model_dir_t = "coarse_temporal/var-tas_pr_sfcWind_rsds/hd-200_num-lay-6_norm-out-uniform_normal_preproc_zerosrandom/"
             args.burn_in_t = 299
             
-        elif args.norm_option == "unif_norm" and args.precip_zeros == "constant" and args.weight_decay == 1e-3:
+        elif args.norm_option == "unif_norm" and args.precip_zeros == "constant" and args.weight_decay == 1e-3 and not args.one_hot_in_super:
             args.latent_dims = [None, 12, 12, 12, 12]
             args.model_dirs = [
-                "coarse/var-tas_pr_sfcWind_rsds/hd-200_num-lay-6_norm-out-uniform_normal_preproc_new-preproc-v2/",
+                "coarse/var-tas_pr_sfcWind_rsds/hd-200_num-lay-6_norm-out-uniform_normal_preproc_zerosconstant/",
                 "super/lr16_hr8/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant/",
                 "super/lr8_hr4/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant/",
                 "super/lr4_hr2/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant/",
                 "super/lr2_hr1/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant/",
+            ]
+            args.burn_ins = [199, 199, 199, 199, 99]
+            
+            args.model_dir_t = "coarse_temporal/var-tas_pr_sfcWind_rsds/hd-200_num-lay-6_norm-out-uniform_normal_preproc_zerosconstant/"
+            args.burn_in_t = 299
+            
+        # with one hot
+        elif args.norm_option == "unif_norm" and args.precip_zeros == "constant" and args.weight_decay == 1e-3 and args.one_hot_in_super:
+            args.latent_dims = [None, 12, 12, 12, 12]
+            args.model_dirs = [
+                "coarse/var-tas_pr_sfcWind_rsds/hd-200_num-lay-6_norm-out-uniform_normal_preproc_zerosconstant/",
+                "super/lr16_hr8/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple/",
+                "super/lr8_hr4/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple/",
+                "super/lr4_hr2/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple/",
+                "super/lr2_hr1/var-tas_pr_sfcWind_rsds/loc-specific-layers_norm-out-uniform__normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple/",
             ]
             args.burn_ins = [199, 199, 199, 199, 99]
             
@@ -475,23 +503,26 @@ if __name__ == '__main__':
         if args.temporal:
             f.write(f"Saving temporal model: {os.path.join(args.model_dir_t, f'model_{args.burn_in_t}.pt')}\n")
     
+    with open(os.path.join(save_dir_samples, "model_size.txt"), "w") as f:
+        n_params = count_parameters_wrapper(model)
+        f.write(f"Total parameters in model: {n_params}\n")
+    
+    # run_indices = np.arange(0,8)
+    gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(args.data_dir)
+    gcm_indices = torch.tensor([gcm_dict[gcm] for gcm in gcm_list])
+    one_hot_gcm = torch.nn.functional.one_hot(gcm_indices)
+    rcm_indices = torch.tensor([rcm_dict[rcm] for rcm in rcm_list])
+    one_hot_rcm = torch.nn.functional.one_hot(rcm_indices)
     mode_unnorm = "hr"
     counterfactuals = args.counterfactuals
+    one_hot_dim = 7
     if not counterfactuals:
         k_range = np.arange(0, 8)
     else:
         k_range = np.arange(0, 1)
         
-        
-        
-        # run_indices = np.arange(0,8)
-        gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(args.data_dir)
-        gcm_indices = torch.tensor([gcm_dict[gcm] for gcm in gcm_list])
-        one_hot_gcm = torch.nn.functional.one_hot(gcm_indices)
-        rcm_indices = torch.tensor([rcm_dict[rcm] for rcm in rcm_list])
-        one_hot_rcm = torch.nn.functional.one_hot(rcm_indices)
-        one_hot_dim = 7
         i_new = 2
+            
     for k in k_range:
         print(f"Index {k}")
         if args.split_coarse_super or args.pure_super:
@@ -517,6 +548,8 @@ if __name__ == '__main__':
             model.eval()
             model.to(device)
             
+            start = time.time()
+            
             for idx, data_batch in enumerate(test_loader_in):
                 if not args.temporal:
                     x, xc, y = data_batch
@@ -526,50 +559,94 @@ if __name__ == '__main__':
                     x_prev, xc_prev, y_prev, x, xc, y = x_prev.to(device), xc_prev.to(device), y_prev.to(device), x.to(device), xc.to(device), y.to(device)
                 
                 if args.split_coarse_super:
-                    pass
+                    # avoid too large data
+                    if idx > 2:
+                        break
+                    gen_coarse_list = []
                 elif args.pure_super:
-                    pass
+                    gen_coarse_list = []
                 
                 with torch.no_grad():
-                    
+                    cls_ids = get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
                     if args.temporal:
                         start_xc = coarse_model_marginal.sample(x_prev[:1, ...], sample_size=1).to(device)
                         # start_xc = model.coarse_model.sample(x_prev[:1, ...], sample_size=1).to(device)
-                        gen = model.sample_temporal(x, sample_size=9, start_xc=start_xc[0, :, 0], x_onehot=x).to(device)
+                        gen = model.sample_temporal(x, sample_size=9, start_xc=start_xc[0, :, 0], x_onehot=x, cls_ids=cls_ids).to(device)
                         gen = gen.view(x.shape[0], len(args.variables), -1, 9)
                     elif not counterfactuals and not args.split_coarse_super and not args.pure_super and not args.save_quantiles:
-                        gen = model.sample(x.to(device), sample_size=9, x_onehot=x).to(device)
+                        gen = model.sample(x.to(device), sample_size=9, x_onehot=x, cls_ids=cls_ids).to(device)
                         gen = gen.view(x.shape[0], len(args.variables), -1, 9)
                         
                     # also alternative one hot experiment
                     elif counterfactuals:
                         gen_list = []
                         gen_counterfact_list = []
+                        x_counterfact = x.clone()
+                        x_counterfact[:, -one_hot_dim:] = torch.cat([one_hot_gcm[i_new], one_hot_rcm[i_new]]).repeat(x.shape[0], 1)
+                        cls_ids_counterfact = get_run_index_from_onehot(x_counterfact[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
+                        npix_list = np.array([int(128 / args.kernel_sizes[i])**2 for i in range(len(args.kernel_sizes))])
+                        noise_dim_super = sum(args.noise_dims[1:] * npix_list[1:])
                         for j in range(9):
-                            x_counterfact = x.clone()
-                            x_counterfact[:, -one_hot_dim:] = torch.cat([one_hot_gcm[i_new], one_hot_rcm[i_new]]).repeat(x.shape[0], 1)
-
                             # need separate generations coarse and super, to ensure noise is the same for both
-                            eps_coarse = torch.randn(x.shape[0], args.noise_dim_coarse * (args.num_layer_coarse // 2) * 2, device=device)
+                            eps_coarse = torch.randn(x.shape[0], args.noise_dims[0] * (args.num_layers[0] // 2) * 2, device=device)
 
-                            x_rcmc = model.coarse_model(x, eps=eps_coarse)
-                            x_rcmc_counterfact = model.coarse_model(x_counterfact, eps=eps_coarse)
-                            
+                            # in new hierarchical wrapper, there is no coarse model anymore; therefore switch to coarse_model_marginal
+                            # x_rcmc = model.coarse_model(x, eps=eps_coarse) 
+                            # x_rcmc_counterfact = model.coarse_model(x_counterfact, eps=eps_coarse)
+                            x_rcmc = coarse_model_marginal(x, eps=eps_coarse)
+                            x_rcmc_counterfact = coarse_model_marginal(x_counterfact, eps=eps_coarse)
+                                                        
                             eps_super = torch.randn(x.shape[0], noise_dim_super, device=device)
-                            gen = model.super_model(x_rcmc, eps=eps_super)
-                            gen_counterfact = model.super_model(x_rcmc_counterfact, eps=eps_super)
+                            gen =  model._apply_remaining_models(x_rcmc, eps=eps_super, x_onehot=x, cls_ids=cls_ids, start_idx=1, return_intermediates=False)
+                            gen_counterfact = model._apply_remaining_models(x_rcmc_counterfact, eps=eps_super, x_onehot=x_counterfact, cls_ids=cls_ids_counterfact, start_idx=1, return_intermediates=False)
+                            #gen = model.super_model(x_rcmc, eps=eps_super)
+                            #gen_counterfact = model.super_model(x_rcmc_counterfact, eps=eps_super)
                             
+                            gen = gen.view(gen.shape[0], len(args.variables), -1)
+                            gen_counterfact = gen_counterfact.view(gen_counterfact.shape[0], len(args.variables), -1)
                             gen_list.append(gen)
                             gen_counterfact_list.append(gen_counterfact)
                         
+                        print(gen_list[0].shape)
                         gen = torch.stack(gen_list, dim=-1)
                         gen_counterfact = torch.stack(gen_counterfact_list, dim=-1)
                         
+                        
                     elif args.split_coarse_super:
-                        pass
+                        # sample first from coarse model and then for each sample, sample again from super model
+                        
+                        # OLD x_rcmc = model.coarse_model.sample(x.to(device), sample_size=9).to(device)
+                        x_rcmc = coarse_model_marginal.sample(x.to(device), sample_size=9).to(device)
+                        
+                        gen_super_list = []
+                        for i in range(9):
+                            for j in range(9):
+                                gen_super = model._apply_remaining_models(
+                                    x_rcmc[..., i], 
+                                    x_onehot=x, 
+                                    cls_ids=cls_ids, 
+                                    start_idx=1, 
+                                    return_intermediates=False
+                                )
+                                gen_super = gen_super.view(x.shape[0], len(args.variables), -1)
+                                gen_super_list.append(gen_super)
+                        gen = torch.stack(gen_super_list, dim=-1)
+                        gen_coarse_list.append(x_rcmc)
                     
                     elif args.pure_super:
-                        pass 
+                        # to do: shape of xc? If not conv_super_coarse, then need to flatten
+                        xc = xc.view(xc.shape[0], -1)
+                        gen = torch.stack([
+                            model._apply_remaining_models(
+                                    xc, 
+                                    x_onehot=x, 
+                                    cls_ids=cls_ids, 
+                                    start_idx=1, 
+                                    return_intermediates=False
+                                ).view(xc.shape[0], len(args.variables), -1)
+                        for j in range(9)], dim=-1)
+                        # gen = model.super_model.sample(xc, sample_size=9, x_onehot=x.to(device)).to(device)
+                        gen_coarse_list.append(xc)   
                         
                     elif args.save_quantiles:
                         gen = model.sample(x.to(device), sample_size=100).to(device) 
@@ -577,10 +654,14 @@ if __name__ == '__main__':
                 if counterfactuals:
                     samples_counterfact.append(gen_counterfact.detach().cpu())
                 
+            end = time.time()
+            print("Time taken for sampling: ", end - start)
+            
             samples_norm = torch.cat(samples)
             if counterfactuals:
                 samples_counterfact_norm = torch.cat(samples_counterfact)
             
+            start = time.time()
             # do normalisation here with larger batch size 
             batch_size_unnorm = 8192 
             n_batches = np.ceil(samples_norm.shape[0] / batch_size_unnorm)
@@ -637,7 +718,10 @@ if __name__ == '__main__':
             samples_raw = torch.cat(samples_raw, dim=0)
             if counterfactuals:
                 samples_counterfact_raw = torch.cat(samples_counterfact_raw, dim=0)
-                
+            
+            end = time.time()
+            print("Time taken for unnormalisation: ", end - start)
+            
             suffix = "" if not args.approx_unif else "_approx"
             if args.split_coarse_super:
                 gen_coarse = torch.cat(gen_coarse_list)
