@@ -458,7 +458,6 @@ if __name__ == '__main__':
                             mlp_depth=args.mlp_depth,
                             noise_dim_mlp=args.noise_dim_mlp,
                             double_linear=args.double_linear,
-                            softmax=False,
                             split_residuals=not args.not_split_residuals
                             ).to(device)
             # change to one hot dim later

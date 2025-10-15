@@ -98,33 +98,6 @@ def get_rcm_gcm_combinations(root):
     gcm_dict = {sorted_gcms[i]: i for i in range(len(sorted_gcms))}
     return gcm_list, rcm_list, gcm_dict, rcm_dict
 
-
-def get_rcm_gcm_combinations_old(root):
-    # get a dictionary with all available GCMs and RCMs
-    # tas_day_EUR-11_CLMcom-ETH-COSMO-crCLIM-v1-1_CNRM-CM5_r1i1p1_rcp85_ALPS_cordexgrid.nc
-    # tas_day_EUR-11_DMI-HIRHAM5_EC-EARTH_r1i1p1_rcp85_ALPS_DJF_cordexgrid.nc
-    pattern = re.compile(r'tas_day_EUR-11_([\w-]+)_([\w-]+)_r1i1p1_rcp85_ALPS_DJF_cordexgrid.nc')
-
-    # List all filenames in the directory
-    file_names = sorted(os.listdir(root))
-    # Extract GCM-RCM combinations from file names
-    rcm_gcm_combinations = []
-    for file_name in file_names:
-        match = pattern.match(file_name)
-        if match:
-            if not (match.group(1) == "CRCM5-3-mem" or "trend" in match.group(1) or "noleap" in match.group(1) or "2022" in match.group(1)):
-               rcm_gcm_combinations.append((match.group(1), match.group(2)))
-
-    rcm_list = [comb[0] for comb in rcm_gcm_combinations]
-    gcm_list = [comb[1] for comb in rcm_gcm_combinations]
-    sorted_rcms = sorted(list(set(rcm_list)))
-    sorted_gcms = sorted(list(set(gcm_list)))
-    rcm_dict = {sorted_rcms[i]: i for i in range(len(sorted_rcms))}
-    gcm_dict = {sorted_gcms[i]: i for i in range(len(sorted_gcms))}
-    return gcm_list, rcm_list, gcm_dict, rcm_dict
-
-
-
 # ---- HELPERS FOR RUN INDEX -----  
 def get_run_index(rcm, gcm, rcm_list=None, gcm_list=None, root="/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"):
     if rcm_list is None or gcm_list is None:
@@ -180,7 +153,7 @@ def add_one_hot(xc, one_hot_in_super=False, conv=False, x=None, one_hot_dim=0):
 # ---------- NORMALISATION HELPERS -----------------------------------
 def normalise(data, mode = "hr", data_type = "tas", sqrt_transform = True, norm_method = "primitive", 
               norm_stats=None, root=None, 
-              n_keep_vals=1000, interp_step=10, len_full_data=int(3e4), logit=False, normal=False):
+              len_full_data=int(3e4), logit=False, normal=False):
     if data_type in ["pr", "sfcWind"] and sqrt_transform:
         name_str = "_sqrt"
         data = torch.sqrt(data)        
@@ -222,18 +195,8 @@ def normalise(data, mode = "hr", data_type = "tas", sqrt_transform = True, norm_
                 norm_stats = torch.load(ns_path)
         data_norm = (data - norm_stats["mean"]) / norm_stats["std"]
         data_norm = data_norm.reshape(data_norm.shape[0], -1)
-    elif norm_method == "rank_val":
-        y = data.reshape(data.shape[0], -1)
-        y_sorted = torch.sort(y, dim = -1)
-        argsorted = y_sorted[1]
-        y_rk = argsorted.argsort(dim = -1)/y.size(1)
-        y_rk[y < 1e-3] = 0 # set all ranks to zero where the value is zero
-        y_values = torch.cat([y_sorted[0][..., :n_keep_vals],
-                              y_sorted[0][..., n_keep_vals:-n_keep_vals][..., :interp_step], 
-                              y_sorted[0][..., -n_keep_vals:]], dim = -1) # subselect, but explicitly keep first and last 100 values
-        data_norm = torch.cat([y_rk, y_values], dim = -1)
     elif norm_method == "uniform":
-        probs = torch.linspace(1, len_full_data, len_full_data) / (len_full_data + 1)  # TO DO: CHECK
+        probs = torch.linspace(1, len_full_data, len_full_data) / (len_full_data + 1) 
         if norm_stats is None:          
             ns_path = os.path.join(root, "norm_stats", mode + "_norm_stats_ecdf_matrix_" + data_type + "_train_" + "SUBSAMPLE" + name_str + ".pt")
             norm_stats = torch.load(ns_path)
@@ -260,7 +223,7 @@ def unnormalise(data_norm, mode = "hr", data_type = "tas", sqrt_transform = True
                 norm_method = "primitive", norm_stats=None, 
                 root=None, final_square=True,
                 sep_mean_std=False,
-                n_keep_vals = 1000, verbose=False, len_full_data=int(3e4), logit=False,
+                n_keep_vals = 1000, len_full_data=int(3e4), logit=False,
                 normal=False,
                 x=None, s1=None,
                 approx_unif=False, interp_step=10):
@@ -330,24 +293,6 @@ def unnormalise(data_norm, mode = "hr", data_type = "tas", sqrt_transform = True
             norm_stats = torch.load(ns_path)
         data_norm = data_norm.view(data_norm.shape[0], s1, s2)
         data = data_norm * norm_stats["std"] + norm_stats["mean"]
-    elif norm_method == "rank_val":
-        data_norm = data_norm.view(data_norm.shape[0], -1)
-        data_rk = data_norm[:, :s1*s2]
-        data_values = data_norm[:, s1*s2:]
-        if sep_mean_std:
-            data_values_mean = data_values[:, 0]
-            data_values_std = data_values[:, 1]
-            data_values_vals = data_values[:, 2:]
-            data_values = (data_values_vals * data_values_std.unsqueeze(1) + data_values_mean.unsqueeze(1))
-        data_values_sorted = torch.sort(data_values, dim = -1)[0]        
-        data_values_sorted = torch.cat([data_values_sorted[:, :n_keep_vals],
-            torch.nn.functional.interpolate(data_values_sorted[:, n_keep_vals:-n_keep_vals].unsqueeze(1), size = s1*s2 - 2*n_keep_vals, mode = "linear").squeeze(1),
-            data_values_sorted[:, -n_keep_vals:]
-        ], dim = 1)
-        data_rk = torch.clamp(data_rk, 0, 1 - 1/ data_rk.size(1)) # avoid order out of range
-        order = torch.round(data_rk * data_rk.size(1)).long()
-        data = torch.stack([data_values_sorted[i, order[i, :]] for i in range(data_values_sorted.shape[0])], dim = 0)
-        data = data.view(data.shape[0], s1, s2)
     elif norm_method == "uniform":
         if logit:
             data_norm = torch.sigmoid(data_norm)
@@ -395,11 +340,7 @@ def unnormalise(data_norm, mode = "hr", data_type = "tas", sqrt_transform = True
         data = data_norm.view(data_norm.shape[0], s1, s2)
     if data_type in ["pr", "sfcWind"] and sqrt_transform and final_square:
         data = data**2
-    if verbose:
-        assert norm_method == "rank_val"
-        return data, data_rk, data_values_sorted
-    else:
-        return data
+    return data
 
 # -------------- NORMALISATION WITH UNIFORM PER MODEL -----------------------------------
 

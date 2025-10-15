@@ -20,8 +20,7 @@ def get_normed_data(lr_ds, data_type, norm_input, sqrt_transform_in, root, mask_
     # data = torch.from_numpy(lr_ds[data_type].data)
     # bring lr_data to the right units
     lr_data = correct_units(lr_data, data_type)
-    lr_data_norm = normalise(lr_data, mode = "lr", data_type = data_type, sqrt_transform = sqrt_transform_in, norm_method = norm_input, root=root,
-                                n_keep_vals=0, interp_step=1)
+    lr_data_norm = normalise(lr_data, mode = "lr", data_type = data_type, sqrt_transform = sqrt_transform_in, norm_method = norm_input, root=root)
 
     if mask_gcm:
         mask_r = torch.ones(20)
@@ -219,7 +218,7 @@ class DownscalingDatasetTwoStepNormed(Dataset):
                     hr_data = batchwise_quantile_clipping(hr_data, q = clip_quantile, batch_size = 365)
                     
                 hr_data_norm = normalise(hr_data, mode = "hr", data_type = data_type, sqrt_transform = sqrt_transform_out, norm_method = norm_output, root=root,
-                                        n_keep_vals=1000, interp_step=10, logit=logit, normal=normal)
+                                        logit=logit, normal=normal)
                 # if numpy array, convert to torch tensor again
                 if isinstance(hr_data_norm, np.ndarray):
                     hr_data_norm = torch.from_numpy(hr_data_norm)

@@ -24,18 +24,6 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
     x = vectorize(x)
     xp = vectorize(xp)
     
-    """
-    # old version of logit that transforms all the data
-    if logit:
-        if clip_quantile is not None:
-            x0 = torch.clamp(x0, clip_quantile, 1 - clip_quantile)
-            x = torch.clamp(x, clip_quantile, 1 - clip_quantile)
-            xp = torch.clamp(xp, clip_quantile, 1 - clip_quantile)
-        x0 = torch.log(x0/(1-x0))
-        x = torch.log(x/(1-x))
-        xp = torch.log(xp/(1-xp))
-    """
-    
     if patch_size is not None:
         img_size = int(np.sqrt(x0.shape[1]))        
         top = np.random.randint(0, img_size + patch_size)
@@ -90,29 +78,6 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
             return loss, s1, s2
     else:
         return loss
-    
-    """
-    old
-    if x0.shape[1] == 1:
-        s1 = torch.abs(x - x0).pow(beta).mean() / 2 + torch.abs(xp - x0).pow(beta).mean() / 2
-        s2 = torch.abs(x - xp).pow(beta).mean()
-        loss = s1 - s2/2
-    if x0p is None:
-        s1 = (vector_norm(x - x0, 2, dim=1) + EPS).pow(beta).mean() / 2 + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta).mean() / 2
-        s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta).mean() 
-        loss = s1 - s2/2
-    else:
-        x0p = vectorize(x0p)
-        s1 = ((vector_norm(x - x0, 2, dim=1) + EPS).pow(beta).mean() + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta).mean() + 
-              (vector_norm(x - x0p, 2, dim=1) + EPS).pow(beta).mean() + (vector_norm(xp - x0p, 2, dim=1) + EPS).pow(beta).mean()) / 4
-        s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta).mean() 
-        s3 = (vector_norm(x0 - x0p, 2, dim=1) + EPS).pow(beta).mean() 
-        loss = s1 - s2/2 - s3/2
-    if verbose:
-        return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1)], dim=0)
-    else:
-        return loss
-    """
     
 def energy_loss_2step(x0, x, xp, x0_c, xc, xc_p, xcond, xoncdp, beta=1, verbose=False):
     # pdb.set_trace()
@@ -187,40 +152,6 @@ def energy_loss_coarse_wrapper_summed(x_coarse0, x_coarse, x_coarse_p, x_coarse0
         return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1), losst.reshape(1), s1t.reshape(1), s2t.reshape(1)], dim=0)
     else:
         return loss + losst
-     
-def energy_loss_rk_val_wrapper(x0, x, xp, beta=1, verbose=False, log_odds_transform=False, sep_mean_std=False, lambda_mean_std=1):
-    x0_rk = x0[:,:(128*128)]
-    x0_val = x0[:,(128*128):]
-    x_rk = x[:,:(128*128)]
-    x_val = x[:,(128*128):]
-    xp_rk = xp[:,:(128*128)]
-    xp_val = xp[:,(128*128):]
-    if log_odds_transform:
-        # re-normalise s.t. between (1/x0_rk.shape[0], 1 - 1/x0_rk.shape[0])
-        x0_rk = x0_rk * (x0_rk.shape[0] - 2) / (x0_rk.shape[0] - 1) + 1 / x0_rk.shape[0]
-        x_rk = x_rk * (x_rk.shape[0] - 2) / (x_rk.shape[0] - 1) + 1 / x_rk.shape[0]
-        xp_rk = xp_rk * (xp_rk.shape[0] - 2) / (xp_rk.shape[0] - 1) + 1 / xp_rk.shape[0]
-        x0_rk = torch.log(x0_rk/(1-x0_rk))
-        x_rk = torch.log(x_rk/(1-x_rk))
-        xp_rk = torch.log(xp_rk/(1-xp_rk))
-    if verbose:
-        loss_rk, s1_rk, s2_rk = energy_loss_two_sample(x0_rk, x_rk, xp_rk, verbose=True, beta=beta)
-        if sep_mean_std:
-            loss_val_mean, s1_val_mean, s2_val_mean = energy_loss_two_sample(torch.mean(x0_val, dim = 1, keepdim = True), x_val[:,0].unsqueeze(1), xp_val[:,0].unsqueeze(1), verbose=True, beta=beta)
-            loss_val_sd, s1_val_sd, s2_val_sd = energy_loss_two_sample(torch.std(x0_val, dim = 1, keepdim = True), x_val[:,1].unsqueeze(1), xp_val[:,1].unsqueeze(1), verbose=True, beta=beta)
-            loss_val_vals, s1_val_vals, s2_val_vals = energy_loss_two_sample(x0_val, x_val[:, 2:], xp_val[:, 2:], verbose=True, beta=beta)
-            loss_val = lambda_mean_std* torch.log(loss_val_mean) + lambda_mean_std * torch.log(loss_val_sd) + torch.log(loss_val_vals)
-            s1_val = lambda_mean_std* torch.log(s1_val_mean) + lambda_mean_std * torch.log(s1_val_sd) + torch.log(s1_val_vals)
-            s2_val = lambda_mean_std* torch.log(s2_val_mean) + lambda_mean_std * torch.log(s2_val_sd) + torch.log(s2_val_vals)
-        else:
-            loss_val, s1_val, s2_val = energy_loss_two_sample(x0_val, x_val, xp_val, verbose=True, beta=beta)    
-        return torch.cat([loss_rk.reshape(1), s1_rk.reshape(1), s2_rk.reshape(1), loss_val.reshape(1), s1_val.reshape(1), s2_val.reshape(1)], dim=0)
-    else:
-        loss_rk = energy_loss_two_sample(x0_rk, x_rk, xp_rk, beta=beta)
-        if sep_mean_std:
-            raise NotImplementedError
-        loss_val = energy_loss_two_sample(x0_val, x_val, xp_val, beta=beta)
-        return torch.cat([loss_rk.reshape(1), loss_val.reshape(1)], dim=0)
     
 def energy_loss_multivariate_summed(x0, x, xp, beta=1, verbose=False, n_vars = 4):
     # n_vars = x0.shape[1]
