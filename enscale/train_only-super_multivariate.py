@@ -334,8 +334,6 @@ if __name__ == '__main__':
                                             kernel_size_hr=args.kernel_size_hr,
                                             clip_quantile=args.clip_quantile_data,
                                             tr_te_split=args.tr_te_split, 
-                                            test_model_index=args.test_model_index,
-                                            train_model_index=args.train_model_index,
                                             logit=args.logit_transform,
                                             normal=args.normal_transform,
                                             server=args.server,
