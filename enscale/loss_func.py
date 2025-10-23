@@ -6,7 +6,7 @@ from utils import vectorize, extract_random_patch
 import pdb
 import numpy as np
 
-def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True, patch_size=None):
+def energy_loss_two_sample(x0, x, xp, beta=1, verbose=False, agg=True, patch_size=None):
     """Loss function based on the energy score (estimated based on two samples).
     
     Args:
@@ -15,9 +15,12 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
         xp (torch.Tensor): iid samples from the estimated distribution.
         beta (float): power parameter in the energy score.
         verbose (bool):  whether to return two terms of the loss.
+        agg (bool): whether to aggregate the loss over the batch 
+            (if yes, mean over batch elements is taken; if not, one loss per batch entry is returned).
+        patch_size (int or None): if not None, extract random patches of given size for loss computation.
     
     Returns:
-        loss (torch.Tensor): energy loss.
+        loss (torch.Tensor): energy loss. (if verbose=True, also returns s1 and s2 terms of the loss, concatenated along dim=0)
     """
     EPS = 0 if float(beta).is_integer() else 1e-5
     x0 = vectorize(x0)
@@ -31,20 +34,6 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
         x0 = extract_random_patch(x0, top=top, left=left, patch_size=patch_size)
         x = extract_random_patch(x, top=top, left=left, patch_size=patch_size)
         xp = extract_random_patch(xp, top=top, left=left, patch_size=patch_size)
-        
-        #x0 = x0.view(-1, img_size, img_size)
-        #x = x.view(-1, img_size, img_size)
-        #xp = xp.view(-1, img_size, img_size)
-        # select patches
-        #top = np.random.randint(0, img_size - patch_size)
-        #left = np.random.randint(0, img_size - patch_size)
-
-        # n = img_size
-        # unnorm_prob = np.concatenate((1/np.cumsum(np.arange(1, n//4 + 2)), np.flip(1/np.cumsum(np.arange(1, n//4 + 1)))))
-        # norm_prob = unnorm_prob / unnorm_prob.sum()
-        # top = np.random.choice(np.arange(0, n // 2 + 1), p=norm_prob)
-        # left = np.random.choice(np.arange(0, n // 2 + 1), p=norm_prob)        
-        
     
     if x0.shape[1] == 1:
         s1 = torch.abs(x - x0).pow(beta) / 2 + torch.abs(xp - x0).pow(beta) / 2
@@ -53,24 +42,12 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
             s1 = s1.mean()
             s2 = s2.mean()
         loss = s1 - s2/2
-    if x0p is None:
-        s1 = (vector_norm(x - x0, 2, dim=1) + EPS).pow(beta) / 2 + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta) / 2
-        s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta) 
-        if agg:
-            s1 = s1.mean()
-            s2 = s2.mean()
-        loss = s1 - s2/2
-    else:
-        x0p = vectorize(x0p)
-        s1 = ((vector_norm(x - x0, 2, dim=1) + EPS).pow(beta) + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta) + 
-              (vector_norm(x - x0p, 2, dim=1) + EPS).pow(beta) + (vector_norm(xp - x0p, 2, dim=1) + EPS).pow(beta)) / 4
-        s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta) 
-        s3 = (vector_norm(x0 - x0p, 2, dim=1) + EPS).pow(beta) 
-        if agg:
-            s1 = s1.mean()
-            s2 = s2.mean()
-            s3 = s3.mean()
-        loss = s1 - s2/2 - s3/2
+    s1 = (vector_norm(x - x0, 2, dim=1) + EPS).pow(beta) / 2 + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta) / 2
+    s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta) 
+    if agg:
+        s1 = s1.mean()
+        s2 = s2.mean()
+    loss = s1 - s2/2
     if verbose:
         if agg:
             return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1)], dim=0)
@@ -79,81 +56,23 @@ def energy_loss_two_sample(x0, x, xp, x0p=None, beta=1, verbose=False, agg=True,
     else:
         return loss
     
-def energy_loss_2step(x0, x, xp, x0_c, xc, xc_p, xcond, xoncdp, beta=1, verbose=False):
-    # pdb.set_trace()
-    loss, s1, s2 = energy_loss_two_sample(x0, x, xp, verbose=True, beta=beta)
-    lossc, s1c, s2c = energy_loss_two_sample(x0_c, xc, xc_p, verbose=True, beta=beta)
-    loss_cond, s1_cond, s2_cond = energy_loss_two_sample(x0, xcond, xoncdp, verbose=True, beta=beta)
-    if verbose:
-        return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1), lossc.reshape(1), s1c.reshape(1), s2c.reshape(1), loss_cond.reshape(1), s1_cond.reshape(1), s2_cond.reshape(1)], dim=0)
-    else:
-        return loss + lossc
-     
-def energy_loss_coarse_wrapper(x_coarse0, x_coarse, x_coarse_p, x_coarse0_t, x_coarse_t, x_coarse_p_t, beta=1, verbose=False):
-    # pdb.set_trace()
-    loss, s1, s2 = energy_loss_two_sample(x_coarse0, x_coarse, x_coarse_p, verbose=True, beta=beta)
-    losst, s1t, s2t = energy_loss_two_sample(x_coarse0_t, x_coarse_t, x_coarse_p_t, verbose=True, beta=beta)
-    if verbose:
-        return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1), losst.reshape(1), s1t.reshape(1), s2t.reshape(1)], dim=0)
-    else:
-        return loss + losst
-    
-def energy_loss_coarse_wrapper_summed(x_coarse0, x_coarse, x_coarse_p, x_coarse0_t, x_coarse_t, x_coarse_p_t, beta=1, verbose=False,
-                                      norm_loss_loc=False, norm_loss_batch=False, p_norm_loss_loc=2, p_norm_loss_batch=2, norm_loss_per_var = False, 
-                                      variables = None, transformed_loss_per_var=True):
-    # verbose for norm_loss_per_var not yet implemented
-    loss, s1, s2 = energy_loss_two_sample(x_coarse0, x_coarse, x_coarse_p, verbose=True, beta=beta)
-    
-    y = x_coarse0
-    gen1 = x_coarse
-    gen2 = x_coarse_p
-    if norm_loss_loc:
-        for j in range(len(p_norm_loss_loc)):
-            lossnp, s1np, s2np = energy_loss_two_sample(torch.norm(F.relu(y), p=p_norm_loss_loc[j], dim=1), 
-                                                        torch.norm(F.relu(gen1), p=p_norm_loss_loc[j], dim=1),
-                                                        torch.norm(F.relu(gen2), p=p_norm_loss_loc[j], dim=1), verbose=True)
-            lossnn, s1nn, s2nn = energy_loss_two_sample(torch.norm(F.relu(-y), p=p_norm_loss_loc[j], dim=1), 
-                                                        torch.norm(F.relu(-gen1), p=p_norm_loss_loc[j], dim=1),
-                                                        torch.norm(F.relu(-gen2), p=p_norm_loss_loc[j], dim=1), verbose=True)
-            loss = loss + lossnp + lossnn
-            s1 = s1 + s1np + s1nn
-            s2 = s2 + s2np + s2nn
-    if norm_loss_batch:
-        for j in range(len(p_norm_loss_batch)):
-            lossrp, s1rp, s2rp = energy_loss_two_sample(torch.norm(F.relu(y), p=p_norm_loss_batch[j], dim=0), 
-                                                        torch.norm(F.relu(gen1), p=p_norm_loss_batch[j], dim=0),
-                                                        torch.norm(F.relu(gen2), p=p_norm_loss_batch[j], dim=0), verbose=True)
-            lossrn, s1rn, s2rn = energy_loss_two_sample(torch.norm(F.relu(-y), p=p_norm_loss_batch[j], dim=0), 
-                                                        torch.norm(F.relu(-gen1), p=p_norm_loss_batch[j], dim=0),
-                                                        torch.norm(F.relu(-gen2), p=p_norm_loss_batch[j], dim=0), verbose=True)
-            loss = loss + lossrp + lossrn
-            s1 = s1 + s1rp + s1rn
-            s2 = s2 + s2rp + s2rn
-    
-    if norm_loss_per_var:
-        # norm_loss_multivariate_summed(x0, x, xp, p_norm_loss_list, beta_norm_loss=1, type = "loc", agg_norm_loss="mean", n_vars = 4):
-        lossnp, lossnn = norm_loss_multivariate_summed(x_coarse0, x_coarse, x_coarse_p, p_norm_loss_loc, beta_norm_loss=1, type = "loc", agg_norm_loss="mean", n_vars = len(variables))
-        lossrp, lossrn = norm_loss_multivariate_summed(x_coarse0, x_coarse, x_coarse_p, p_norm_loss_batch, beta_norm_loss=1, type = "batch", agg_norm_loss="mean", n_vars = len(variables))
-        loss = loss + lossnp + lossnn + lossrp + lossrn
-        
-    # losst, s1t, s2t = energy_loss_two_sample(x_coarse0_t, x_coarse_t, x_coarse_p_t, verbose=True, beta=beta)
-    if transformed_loss_per_var:
-        for i in range(x_coarse0_t.shape[1]):
-            if i == 0:
-                losst, s1t, s2t = energy_loss_two_sample(x_coarse0_t[:, i, :], x_coarse_t[:, i, :], x_coarse_p_t[:, i, :], verbose=True, beta=beta)
-            else:
-                loss2, s12, s22 = energy_loss_two_sample(x_coarse0_t[:, i, :], x_coarse_t[:, i, :], x_coarse_p_t[:, i, :], verbose=True, beta=beta)
-                losst = losst + loss2
-                s1t = s1t + s12
-                s2t = s2t + s22 
-    else:  
-        losst, s1t, s2t = energy_loss_two_sample(x_coarse0_t, x_coarse_t, x_coarse_p_t, verbose=True, beta=beta)
-    if verbose:
-        return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1), losst.reshape(1), s1t.reshape(1), s2t.reshape(1)], dim=0)
-    else:
-        return loss + losst
-    
 def energy_loss_multivariate_summed(x0, x, xp, beta=1, verbose=False, n_vars = 4):
+    """
+    Multivariate energy loss computed as the sum of univariate energy losses.
+    Args:
+        x0 (torch.Tensor): iid samples from the true distribution.
+        x (torch.Tensor): iid samples from the estimated distribution.
+        xp (torch.Tensor): iid samples from the estimated distribution.
+        beta (float): power parameter in the energy score.
+        verbose (bool):  whether to return two terms of the loss.
+        n_vars (int): number of variables (dimensions) in the multivariate data.
+        
+    Details:
+        Dimensions of x0, x, xp can be either (batch_size, n_vars, dim_per_var) or (batch_size, n_vars * dim_per_var).
+    
+    Returns:
+        loss (torch.Tensor): summed energy loss. (if verbose=True, also returns summed s1 and s2, concatenated along dim=0)
+    """
     # n_vars = x0.shape[1]
     for i in range(n_vars):
         if len(x0.shape) == 3:
@@ -178,7 +97,32 @@ def energy_loss_multivariate_summed(x0, x, xp, beta=1, verbose=False, n_vars = 4
         return loss
 
 def norm_loss(y, gen1, gen2, p_norm_loss_loc, p_norm_loss_batch, beta_norm_loss=1, agg_norm_loss="mean"):
-    
+    """
+    Compute the norm loss between the true and generated samples.
+    Here, norm loss refers to the energy loss computed on the norms of the samples. 
+    First, a norm is applied to one of the dimensions in each sample (e.g. across spatial dimension or across batch dimension), 
+    then the energy loss is computed based on these norms.
+    This is done for multiple p-norms specified in p_norm_loss_loc and p_norm_loss_batch.
+    norm_loss_loc refers to applying the norm across the spatial dimension (i.e. per sample in the batch),
+    while norm_loss_batch refers to applying the norm across the batch dimension (i.e. per spatial location).
+    Norms are computed separately for the positive part (ReLU) and negative part (ReLU(-x)) of the samples.
+    Args:
+        y (torch.Tensor): true samples (flattened, i.e. shape (batch_size, spatial_dim)).
+        gen1 (torch.Tensor): first set of generated samples (flattened, i.e. shape (batch_size, spatial_dim)).
+        gen2 (torch.Tensor): second set of generated samples (flattened, i.e. shape (batch_size, spatial_dim)).
+        p_norm_loss_loc (list of int): list of p values for the p-norm applied across spatial dimension.
+        p_norm_loss_batch (list of int): list of p values for the p-norm applied across batch dimension.
+        beta_norm_loss (float): power parameter in the energy score.
+        agg_norm_loss (str): aggregation method for batch-wise norm loss ("mean" or "max"). After applying the p-norm across batch dimension in each location,
+          energy loss is computed on the norms in each location, and the results are aggregated using the specified method
+          (either max across locations or mean across locations).
+          
+    Returns:
+        total_lossnp (torch.Tensor): total norm loss for positive part (ReLU) across spatial dimension.
+        total_lossnn (torch.Tensor): total norm loss for negative part (ReLU(-x)) across spatial dimension.
+        total_lossrp (torch.Tensor): total norm loss for positive part (ReLU) across batch dimension.
+        total_lossrn (torch.Tensor): total norm loss for negative part (ReLU(-x)) across batch dimension.
+    """
     if p_norm_loss_loc:
         for i in range(len(p_norm_loss_loc)):
             p_norm_loss = p_norm_loss_loc[i]
@@ -231,7 +175,36 @@ def norm_loss(y, gen1, gen2, p_norm_loss_loc, p_norm_loss_batch, beta_norm_loss=
 
 
 def norm_loss_multivariate_summed(x0, x, xp, p_norm_loss_list, beta_norm_loss=1, type = "loc", agg_norm_loss="mean", n_vars = 4):
-    # n_vars = x0.shape[1]
+    """
+    Multivariate norm loss computed as the sum of univariate norm losses.
+    Compute the norm loss between the true and generated samples.
+    Here, norm loss refers to the energy loss computed on the norms of the samples. 
+    First, a norm is applied to one of the dimensions in each sample (e.g. across spatial dimension or across batch dimension), 
+    then the energy loss is computed based on these norms.
+    This is done for multiple p-norms specified in p_norm_loss_loc and p_norm_loss_batch.
+    norm_loss_loc refers to applying the norm across the spatial dimension (i.e. per sample in the batch),
+    while norm_loss_batch refers to applying the norm across the batch dimension (i.e. per spatial location).
+    Norms are computed separately for the positive part (ReLU) and negative part (ReLU(-x)) of the samples.
+    Args:
+        x0 (torch.Tensor): true samples
+        x (torch.Tensor): first set of generated samples
+        xp (torch.Tensor): second set of generated samples
+        p_norm_loss_list (list of int): list of p values for the p-norm applied.
+        beta_norm_loss (float): power parameter in the energy score.
+        type (str): "loc" for applying the norm across spatial dimension, "batch" for applying the norm across batch dimension.
+        agg_norm_loss (str): aggregation method for batch-wise norm loss ("mean" or "max"). After applying the p-norm across batch dimension in each location,
+          energy loss is computed on the norms in each location, and the results are aggregated using the specified method
+          (either max across locations or mean across locations).
+        n_vars (int): number of variables (dimensions) in the multivariate data.
+        
+    Details:
+        Dimensions of x0, x, xp can be either (batch_size, n_vars, dim_per_var) or (batch_size, n_vars * dim_per_var).
+    
+    Returns:
+        losspvals (torch.Tensor): total norm loss for positive part (ReLU) across specified dimension.
+        lossnvals (torch.Tensor): total norm loss for negative part (ReLU(-x)) across specified dimension.
+    
+    """
     losspvals = []
     lossnvals = []
     mp = torch.nn.MaxPool1d(128*128, stride=128*128)
@@ -275,19 +248,46 @@ def norm_loss_multivariate_summed(x0, x, xp, p_norm_loss_list, beta_norm_loss=1,
     
     
 def ridge_loss(x0, x, mse, model, alpha = 0):
+    """
+    Ridge loss function: MSE plus L2 penalty on model weights.
+    Args:
+        x0 (torch.Tensor): true samples.
+        x (torch.Tensor): generated samples.
+        mse (function): mean squared error function.
+        model (torch.nn.Module): model with linear layer whose weights are penalized.
+        alpha (float): regularization parameter for L2 penalty.
+    
+    Returns:
+        loss (torch.Tensor): ridge loss.
+    """
     # print("norm: ", torch.linalg.vector_norm(model.linear.weight))
     # print("norm in numpy: ", np.linalg.norm(model.linear.weight.detach().cpu().numpy()))
     # print("mse torch", mse(outputs, targets))
     # print("mse numpy", mean_squared_error(torch.flatten(outputs, start_dim = 1).detach().cpu().numpy(), torch.flatten(targets, start_dim = 1).detach().cpu().numpy()))
     # weight has shape (20*36, 20*36*5), vector_norm flattens the weight
-    try:
-        return mse(x0, x) + torch.tensor(alpha).to("cuda") * torch.linalg.vector_norm(model.linear.weight)**2 / 20 / 36
-    except:
-        pdb.set_trace()
+    return mse(x0, x) + torch.tensor(alpha).to("cuda") * torch.linalg.vector_norm(model.linear.weight)**2 / 20 / 36
     
     # return mse(x0, x) + torch.tensor(alpha).to("cuda") * torch.linalg.vector_norm(model.linear.weight)**2 / 20 / 36
 
 def avg_constraint(xc, gen):
+    """
+    Average constraint loss between low-resolution and high-resolution samples.
+    Calculates difference between low-resolution samples and average-pooled high-resolution samples.
+    Args:
+        xc (torch.Tensor): low-resolution true samples.
+        gen (torch.Tensor): generated high-resolution samples.
+    
+    Details:
+        Assumes square images, i.e. number of pixels is a perfect square.
+        Also assumes that the high-resolution images are an integer multiple of the low-resolution images in each dimension, 
+        that the upsampling factor is the same in both dimensions,
+        and that the grids are aligned (i.e. no shifts).
+        
+        xc, gen have shape (batch_size, num_pixels).
+    
+    Returns:
+        loss (torch.Tensor): average constraint loss.
+    """
     size_low = int(np.sqrt(xc.shape[-1]))
     size = int(np.sqrt(gen.shape[-1]))
     ups_factor = size / size_low
@@ -295,6 +295,16 @@ def avg_constraint(xc, gen):
     return torch.norm(gen_avg - xc, 2, dim = 1).mean()
     
 def avg_constraint_per_var(xc, gen, n_vars = 4):
+    """
+    Average constraint per variable, for super-resolution setup.
+    Args:
+        xc (torch.Tensor): low-resolution true samples.
+        gen (torch.Tensor): generated high-resolution samples.
+        n_vars (int): number of variables (dimensions) in the multivariate data.
+        
+    Returns:
+        loss (torch.Tensor): summed average constraint loss across variables.
+    """
     for i in range(n_vars):
         if len(xc.shape) == 3:
             xc_var = xc[:, i, :]
@@ -339,23 +349,4 @@ def crps_pixelwise(x0, x, xp, beta=1, verbose=False):
     if verbose:
         return torch.cat([loss.reshape(1), s1.reshape(1), s2.reshape(1)], dim=0)
     else:
-        return loss    
-    
-# ----- penalty for autoencoder ----------------
-
-def safe_std(x, dim=None):
-    if dim is None:
-        return torch.std(x) if x.numel() > 1 else torch.tensor(0.0)
-    else:
-        return torch.std(x, dim=dim) if x.size(dim) > 1 else torch.zeros(x.size(dim))
-
-def group_variance_penalty(gen, label):
-    penalty = vector_norm(gen.std(dim=0) - 1) # penalty for variance of all components
-    penalty = penalty + vector_norm(gen.mean(dim=0)) # penalty for mean of all components
-
-    unique_labels = torch.unique(label, dim = 0)
-    for unique_label in unique_labels:
-        row_wise_check = torch.all(torch.eq(label, unique_label), dim=1)
-        group = gen[row_wise_check, ...]
-        penalty = penalty + vector_norm(safe_std(group, dim=0))
-    return penalty
+        return loss
