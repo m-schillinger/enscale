@@ -16,8 +16,8 @@ class RectUpsampler(nn.Module):
         Args:
             grid_size_lo : int : size of the low-resolution grid (assumed square)
             grid_size_hi : int : size of the high-resolution grid (assumed square)
-            n_features   : int : number of features per pixel (for us: number of climate variables)
-            num_classes  : int : number of classes (for class-specific weights/biases; for us: classes are different GCM-RCM pairs)
+            n_features   : int : number of features per pixel (for EnScale: number of climate variables)
+            num_classes  : int : number of classes (for class-specific weights/biases; for EnScale: classes are different GCM-RCM pairs)
             num_neighbors: int : number of nearest neighbors to use for interpolation
         
         Input: 
@@ -58,6 +58,7 @@ class RectUpsampler(nn.Module):
         self.bias_high = nn.Parameter(torch.zeros(num_classes, n_features, self.p_hi))
     
     def _compute_2d_neighbors(self):
+        """Pre-compute k nearest neighbors in 2D grid from low-res to high-res."""
         grid_hi = self.grid_hi
         grid_lo = self.grid_lo
         k = self.k
@@ -127,13 +128,13 @@ class LocalResiduals(nn.Module):
     """ Module class for learning residuals on a high-resolution grid
         using local neighborhoods and a shared MLP.
         Each pixel is updated based on its k nearest neighbors in the grid.
-        The update is performed by a weighted combination of the neighbors,
+        The update is performed by a weighted linear combination of the neighbors,
         followed by a shared MLP that outputs the residual for each pixel.
         
         Args:
             height        : int : height of the grid
             width         : int : width of the grid (note: if combined with RectUpsampler, height=width=grid_size_hi and grid is square)
-            n_features    : int : number of features per pixel (for us: number of climate variables)
+            n_features    : int : number of features per pixel (for EnScale: number of climate variables)
             num_neighbors : int : number of nearest neighbors to use for local updates
             map_dim       : int : dimension of the intermediate feature map after weighted combination of neighbors, serves as input to MLP
             noise_dim     : int : dimension of the noise vector concatenated to each pixel's features before weighted combination
@@ -170,9 +171,6 @@ class LocalResiduals(nn.Module):
             self.noise_dim_mlp = noise_dim_mlp
         self.num_classes = num_classes
         
-        # Weight map: (H*W, k, map_dim, n_features + noise_dim)
-        # self.weight_map = nn.Parameter(torch.empty(self.npix, self.k, map_dim, n_features + noise_dim))
-        
         # Weight map: (C, H*W, k, map_dim, n_features + noise_dim)
         if num_classes > 1:
             self.weight_map = nn.Parameter(torch.empty(self.num_classes, self.npix, self.k, map_dim, n_features + noise_dim))
@@ -202,7 +200,9 @@ class LocalResiduals(nn.Module):
     def _compute_neighbors(self, radius=1):
         """
         Compute neighbors for each pixel in a 2D grid.
-
+        Old version that uses uses same radius for all pixels, leading to fewer than K neighbors for edge pixels.
+        In this case, out-of-bounds neighbors are replaced by self index.
+        Leads to suboptimal performance at the edges.
         Args:
             radius (int): Neighborhood radius. radius=1 means 3x3 (including self), radius=2 means 5x5, etc.
 
@@ -225,6 +225,15 @@ class LocalResiduals(nn.Module):
         return torch.tensor(neighbors, dtype=torch.long)  # (H*W, K)
 
     def _compute_neighbors_adjusted(self, radius=1):
+        """
+        Compute neighbors for each pixel in a 2D grid.
+        New version that ensures each pixel has exactly K neighbors by expanding the search radius for edge pixels.
+        For each pixel in the grid, precomputes K neighbor indices, where K = (2*radius + 1)**2.
+        Args:
+            radius (int): Neighborhood radius. radius=1 means 3x3 (including self), radius=2 means 5x5, etc.
+        Returns:
+            torch.LongTensor of shape (H*W, K)
+        """ 
         H, W = self.height, self.width
         K = (2 * radius + 1) ** 2
         neighbors = torch.empty((H * W, K), dtype=torch.long)
@@ -268,22 +277,28 @@ class LocalResiduals(nn.Module):
 
         return neighbors  # (H*W, K)
     
-    def forward(self, y_in, cls_ids = None, return_latent=False):
+    def forward(self, y_in, cls_ids = None, return_latent=False, eps=None):
         """
-        y_in: (B, n_features, H, W)
-        returns: (B, n_features, H, W)
+        Args:
+            y_in: (B, n_features, H, W)
+            cls_ids: (B) class indices
+            return_latent: if True, also return the intermediate feature map before MLP
+            eps: optional noise input; reshaped to (B, noise_dim, H, W) 
+        Returns: 
+            out (B, n_features, H, W)
+            or (out, intermediate) if return_latent is True, where intermediate is (B, npix, map_dim)
         """
         B = y_in.shape[0]
         H, W = self.height, self.width
-        
-        if cls_ids is None:
-            cls_ids = torch.zeros(B, dtype=torch.long)
 
         # Flatten spatial dims
         y_flat = y_in.view(B, self.n_features, -1)           # (B, F, npix)
         
         # Generate noise for neighbors (B, noise_dim, npix)
-        noise = torch.randn(B, self.noise_dim, self.npix, device=y_in.device)
+        if eps is None:
+            noise = torch.randn(B, self.noise_dim, self.npix, device=y_in.device)
+        else:
+            noise = eps.view(B, self.noise_dim, self.npix).to(y_in.device)
         y_with_noise = torch.cat([y_flat, noise], dim=1)  # (B, F + noise_dim, npix)
         
         # Gather neighbors for y_in + noise
@@ -294,11 +309,8 @@ class LocalResiduals(nn.Module):
         # Compute einsum over k and features: output (B, npix, map_dim)
         
         w = self.weight_map
-        # intermediate = torch.einsum("bpkn,pkmc->bpm", gather_y, w)  # (B, npix, map_dim) - WRONG
-        # intermediate = torch.einsum("bpkn,pkmn->bpm", gather_y, w)  # (B, npix, map_dim)
-
         # add classes
-        if self.num_classes > 1:
+        if self.num_classes > 1 and cls_ids is not None:
             weights_per_class = w[cls_ids] # shape (B, npix, k, map_dim, F + noise_dim)
             intermediate = torch.einsum("bpkn,bpkmn->bpm", gather_y, weights_per_class)  # (B, npix, map_dim)
         else:
@@ -331,11 +343,34 @@ class LocalResiduals(nn.Module):
             return out
         
 class RectUpsampleWithResiduals(nn.Module):
+    """ Module class that combines RectUpsampler and LocalResiduals to perform super-resolution.
+        First, the low-resolution input is upsampled using RectUpsampler.
+        Then, LocalResiduals is applied to refine the upsampled output.
+        
+        Args:
+            grid_size_lo     : int : size of the low-resolution grid (assumed square)
+            grid_size_hi     : int : size of the high-resolution grid (assumed square)
+            n_features       : int : number of features per pixel (for EnScale: number of climate variables)
+            num_classes      : int : number of classes used in RectUpsampler (for class-specific weights/biases; for EnScale: classes are different GCM-RCM pairs)
+            num_classes_resid: int : number of classes used in LocalResiduals (for class-specific weights; for us: classes are different GCM-RCM pairs)
+            num_neighbors_ups : int : number of nearest neighbors for RectUpsampler
+            num_neighbors_res : int : number of nearest neighbors for LocalResiduals
+            map_dim          : int : dimension of the intermediate feature map in LocalResiduals
+            noise_dim        : int : dimension of the noise vector for LocalResiduals
+            mlp_hidden       : int : number of hidden units in the shared MLP of LocalResiduals
+            mlp_depth        : int : number of layers in the shared MLP of LocalResiduals
+            shared_noise     : bool: if True, the noise vector for the MLP in LocalResiduals is shared across all pixels in the grid
+            noise_dim_mlp  : int : dimension of the noise vector for the MLP in LocalResiduals
+            double_linear    : bool: if True, use LocalResiduals2 with two MLPs instead of one
+            split_residuals  : bool: if True, add the upsampled output to the residuals output before returning; 
+                if False, the residuals output is returned directly (and thus represents the full output)
+        """
     def __init__(self,
                  grid_size_lo,
                  grid_size_hi,
                  n_features=4,
                  num_classes=1,
+                 num_classes_resid=1,
                  num_neighbors_ups=9,
                  num_neighbors_res=25,
                  map_dim=16,
@@ -357,7 +392,7 @@ class RectUpsampleWithResiduals(nn.Module):
         self.double_linear = double_linear
         if double_linear:
             # If double_linear is True, use LocalResiduals2
-            raise NotImplementedError("double_linear is not implemented in this version.")
+            raise NotImplementedError("LocalResiduals2 is not implemented in this code snippet.")
         else:
             self.residuals = LocalResiduals(
                 height=grid_size_hi,
@@ -370,56 +405,49 @@ class RectUpsampleWithResiduals(nn.Module):
                 mlp_depth=mlp_depth,
                 shared_noise=shared_noise,
                 noise_dim_mlp=noise_dim_mlp,
-                num_classes=num_classes
+                num_classes=num_classes_resid
             )
         self.split_residuals = split_residuals
 
     def forward(self, x: torch.Tensor, cls_ids: torch.Tensor = None, 
-                return_latent: bool = False, return_mean: bool = False) -> torch.Tensor:
+                return_latent: bool = False, return_mean: bool = False,
+                eps: torch.Tensor = None) -> torch.Tensor:
         """
         Args:
             x         : (B, n_features * p_lo)
             cls_ids  : (B)
-        Returns:
-            output    : (B, n_features, grid_hi, grid_hi)
-        """
-        if return_latent:
-            y_upsampled = self.upsampler(x, cls_ids)                # (B, F, H, W)
-            if self.double_linear:
-                y_out, intermediate, intermediate2 = self.residuals(y_upsampled, cls_ids=cls_ids, return_latent=True)
-                # shape intermediate (B, npix, map_dim)
-                # reshape to match shape of y_upsampled
-                intermediate = intermediate.transpose(1,2).reshape(y_upsampled.shape[0], -1, y_upsampled.shape[2], y_upsampled.shape[3])  # (B, map_dim, H, W)
-                intermediate2 = intermediate2.transpose(1,2).reshape(y_upsampled.shape[0], -1, y_upsampled.shape[2], y_upsampled.shape[3])
-                
-                if self.split_residuals:
-                    y_interm = (intermediate + y_upsampled).reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
-                    y_interm2 = (intermediate2 + y_upsampled).reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
-                else:
-                    y_interm = intermediate.reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
-                    y_interm2 = intermediate2.reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
-            else:
-                y_out, intermediate = self.residuals(y_upsampled, cls_ids=cls_ids, return_latent=True)
-                intermediate = intermediate.transpose(1,2).reshape(y_upsampled.shape[0], -1, y_upsampled.shape[2], y_upsampled.shape[3])  # (B, map_dim, H, W)
-                if self.split_residuals:
-                    y_interm = (intermediate + y_upsampled).reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
-                else:
-                    y_interm = intermediate.reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
+            return_latent : if True, also return intermediate feature maps from LocalResiduals
+                ()
+            return_mean   : if True, also return the upsampled output before residuals
+            eps          : (B, n_features, grid_hi, grid_hi) optional noise input for LocalResiduals
             
+        Notes:
+            map_dim should equal number of features if return_latent is True (such that y_upsampled and intermediate have same dimension)
+            
+        Returns:
+            output    : (B, n_features * grid_hi * grid_hi)
+        """
+        if self.double_linear:
+            raise NotImplementedError("LocalResiduals2 is not implemented in this code snippet.")
+        y_upsampled = self.upsampler(x, cls_ids)                # (B, F, H, W)
+        if return_latent:
+            y_out, intermediate = self.residuals(y_upsampled, cls_ids=cls_ids, return_latent=True, eps=eps)
+            intermediate = intermediate.transpose(1,2).reshape(y_upsampled.shape[0], -1, y_upsampled.shape[2], y_upsampled.shape[3])  # (B, map_dim, H, W)
+            if self.split_residuals:
+                y_interm = (intermediate + y_upsampled).reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
+            else:
+                y_interm = intermediate.reshape(y_upsampled.shape[0], -1)  # (B, F * H * W)
+        
             if self.split_residuals:
                 y_out = y_out + y_upsampled                               # (B, F, H, W)
                 
             y_out = y_out.reshape(y_out.shape[0], -1)
-            if self.double_linear:
-                return y_out, y_interm, y_interm2
-            else:
-                return y_out, y_interm
+            return y_out, y_interm
         else:
-            y_upsampled = self.upsampler(x, cls_ids)                # (B, F, H, W)
             if self.split_residuals:
-                y_out = self.residuals(y_upsampled, cls_ids=cls_ids) + y_upsampled        # (B, F, H, W)
+                y_out = self.residuals(y_upsampled, cls_ids=cls_ids, eps=eps) + y_upsampled        # (B, F, H, W)
             else:
-                y_out = self.residuals(y_upsampled, cls_ids=cls_ids)
+                y_out = self.residuals(y_upsampled, cls_ids=cls_ids, eps=eps)
             y_out = y_out.contiguous().reshape(y_out.shape[0], -1)
             if return_mean:
                 return y_out, y_upsampled
