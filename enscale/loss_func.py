@@ -34,14 +34,7 @@ def energy_loss_two_sample(x0, x, xp, beta=1, verbose=False, agg=True, patch_siz
         x0 = extract_random_patch(x0, top=top, left=left, patch_size=patch_size)
         x = extract_random_patch(x, top=top, left=left, patch_size=patch_size)
         xp = extract_random_patch(xp, top=top, left=left, patch_size=patch_size)
-    
-    if x0.shape[1] == 1:
-        s1 = torch.abs(x - x0).pow(beta) / 2 + torch.abs(xp - x0).pow(beta) / 2
-        s2 = torch.abs(x - xp).pow(beta)
-        if agg:
-            s1 = s1.mean()
-            s2 = s2.mean()
-        loss = s1 - s2/2
+            
     s1 = (vector_norm(x - x0, 2, dim=1) + EPS).pow(beta) / 2 + (vector_norm(xp - x0, 2, dim=1) + EPS).pow(beta) / 2
     s2 = (vector_norm(x - xp, 2, dim=1) + EPS).pow(beta) 
     if agg:
