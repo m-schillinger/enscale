@@ -13,6 +13,8 @@ class StoLayer(nn.Module):
         out_dim (int): output dimension
         noise_dim (int, optional): noise dimension. Defaults to 100.
         add_bn (bool, optional): whether to add BN layer. Defaults to True.
+        out_act (str, optional): output activation function. Defaults to None.
+        noise_std (float, optional): standard deviation of the noise. Defaults to 1.
     """
     def __init__(self, in_dim, out_dim, noise_dim=100, add_bn=True, out_act=None, noise_std=1):
         super().__init__()
@@ -52,6 +54,7 @@ class StoResBlock(nn.Module):
         noise_dim (int, optional): noise dimension. Defaults to 100.
         add_bn (bool, optional): whether to add batch normalization. Defaults to True.
         out_act (str, optional): output activation function. Defaults to None.
+        noise_std (float, optional): standard deviation of the noise. Defaults to 1.
     """
     def __init__(self, dim=100, hidden_dim=None, out_dim=None, noise_dim=100, add_bn=True, out_act=None, noise_std=1):
         super().__init__()
@@ -113,6 +116,9 @@ class StoResBlock_ExternalNoise(nn.Module):
         noise_dim (int, optional): noise dimension. Defaults to 100.
         add_bn (bool, optional): whether to add batch normalization. Defaults to True.
         out_act (str, optional): output activation function. Defaults to None.
+        noise_std (float, optional): standard deviation of the noise. Defaults to 1.
+        dropout (bool, optional): whether to use dropout instead of concatenated noise. Defaults to False.
+        dropout_final (bool, optional): whether to apply dropout at the final layer. Defaults to True, but only used if dropout is True.
     """
     def __init__(self, dim=100, hidden_dim=None, out_dim=None, noise_dim=100, add_bn=True, out_act=None, noise_std=1,
                  dropout=False, dropout_final=True):
@@ -179,10 +185,7 @@ class StoResBlock_ExternalNoise(nn.Module):
                     out = self.layer2(out * eps1)
                 else:
                     raise NotImplementedError("Dropout with external noise not implemented yet.")
-                    # eps1 = ?
-                    #assert eps.size(0) == x.size(0)
-                    #assert eps.size(1) == self.noise_dim
-                    out = self.layer2(out * eps1)
+
                 # Q: dropout again?
                 if self.dropout_final:
                     if eps is None:
@@ -315,7 +318,7 @@ class StoNetBase(nn.Module):
     
 
 class StoUNet(StoNetBase):
-    """Stochastic neural network. UNet shape.
+    """Stochastic neural network. UNet shape. As StoNet but with preprocessing layers and more options.
 
     Args:
         in_dim (int): input dimension 
@@ -326,6 +329,15 @@ class StoUNet(StoNetBase):
         add_bn (bool, optional): whether to add BN layer. Defaults to True.
         out_act (str, optional): output activation function. Defaults to None.
         resblock (bool, optional): whether to use residual blocks. Defaults to False.
+        noise_std (float, optional): standard deviation of the noise. Defaults to 1.
+        preproc_layer (bool, optional): whether to use preprocessing layer. Defaults to False. 
+            If True, each input dimension specified in `input_dims_for_preproc` will be preprocessed first with a separate layer to `preproc_dim` dimensions,
+            and then concatenated together as the input to the main network.
+        preproc_dim (int, optional): dimension after preprocessing each input dimension. Defaults to 20.
+        layer_shrinkage (int, optional): factor to shrink the layer size in the intermediate layers. Defaults to 16, 
+            i.e., the intermediate layers will have `out_dim // layer_shrinkage` neurons.
+        dropout (bool, optional): whether to use dropout instead of concatenated noise. Defaults to False.
+        input_dims_for_preproc (list, optional): list of input dimensions for preprocessing layers, see above. Defaults to None.
     """
     def __init__(self, in_dim, out_dim, num_layer=2, hidden_dim=100, 
                  noise_dim=100, add_bn=True, out_act=None, resblock=False, noise_std=1,
@@ -484,6 +496,7 @@ class StoUNet(StoNetBase):
         
 class StoNet(StoNetBase):
     """Stochastic neural network.
+    Similar to StoUNet but without preprocessing layers and fewer options.
 
     Args:
         in_dim (int): input dimension 
@@ -494,6 +507,8 @@ class StoNet(StoNetBase):
         add_bn (bool, optional): whether to add BN layer. Defaults to True.
         out_act (str, optional): output activation function. Defaults to None.
         resblock (bool, optional): whether to use residual blocks. Defaults to False.
+        noise_all_layer (bool, optional): whether to add noise to all layers. If False, noise is only added in the input layer. Defaults to True.
+        out_bias (bool, optional): whether to add bias in the output layer (only for non-resblock version). Defaults to True.
     """
     def __init__(self, in_dim, out_dim, num_layer=2, hidden_dim=100, 
                  noise_dim=100, add_bn=True, out_act=None, resblock=False, 
@@ -555,66 +570,11 @@ class StoNet(StoNetBase):
         else:
             return self.out_layer(self.inter_layer(self.input_layer(x)))
             
-# ----- TESTING MULTIPLE COARSE MODELS FOR EACH ONE HOT VALUE ------------
-
-class MultipleStoUNetWrapper(StoNetBase):
-    def __init__(self, num_models, sto_unet_params, one_hot_dim=7):
-        super(MultipleStoUNetWrapper, self).__init__(noise_dim=sto_unet_params["noise_dim"])
-        self.models = nn.ModuleList([StoUNet(**sto_unet_params) for _ in range(num_models)])
-        self.one_hot_dim = one_hot_dim
-
-    def forward(self, x, model_index):
-        x_vals = x[:, :-self.one_hot_dim]
-        return self.models[model_index](x_vals)
-    
-    def sample(self, x, model_index, sample_size=5, expand_dim=True):
-        x_vals = x[:, :-self.one_hot_dim]
-        return self.models[model_index].sample(x_vals, sample_size=sample_size, expand_dim=expand_dim)
-    
-    def predict(self, x, model_index, sample_size=5):
-        x_vals = x[:, :-self.one_hot_dim]
-        return self.models[model_index].predict(x_vals, sample_size=sample_size)
-    
-    
-class MultivariateStoUNetWrapper(StoNetBase):
-    def __init__(self, num_models, sto_unet_params, expand_variables=True, split_input=True):
-        super(MultivariateStoUNetWrapper, self).__init__(noise_dim=sto_unet_params["noise_dim"])
-        self.models = nn.ModuleList([StoUNet(**sto_unet_params) for i in range(num_models)])
-        self.num_models = num_models
-        self.expand_variables = expand_variables
-        self.split_input = split_input
-        
-    def forward(self, x, eps=None):
-        if self.split_input:
-            if len(x.shape) == 2:
-                dim_per_model = x.size(1) // self.num_models
-                res_per_model = [self.models[i](x[:, i*dim_per_model:(i+1)*dim_per_model], eps=eps) for i in range(self.num_models)]
-            elif len(x.shape) == 3:
-                res_per_model = [self.models[i](x[:, i, :], eps=eps) for i in range(self.num_models)]
-        else:
-            res_per_model = [self.models[i](x, eps=eps) for i in range(self.num_models)]
-        
-        if self.expand_variables:
-            return torch.stack(res_per_model, dim=1)
-        else:
-            return torch.cat(res_per_model, dim=1)
-    
-    def sample(self, x, sample_size=5, expand_dim=True):
-        if self.split_input:
-            if len(x.shape) == 2:
-                dim_per_model = x.size(1) // self.num_models
-                res_per_model = [self.models[i].sample(x[:, i*dim_per_model:(i+1)*dim_per_model], sample_size=sample_size, expand_dim=expand_dim) for i in range(self.num_models)]
-            elif len(x.shape) == 3:
-                res_per_model = [self.models[i].sample(x[:, i, :], sample_size=sample_size, expand_dim=expand_dim) for i in range(self.num_models)]
-        else:
-            res_per_model = [self.models[i].sample(x, sample_size=sample_size, expand_dim=expand_dim) for i in range(self.num_models)]
-        if self.expand_variables:
-            return torch.stack(res_per_model, dim=1)
-        else:
-            return torch.cat(res_per_model, dim=1)
-    
 
 class MeanResidualWrapper(StoNetBase):
+    """
+    Wrapper that combines a mean model and a residual stochastic model.
+    """
     def __init__(self, mean_model, residual_model):
         super(MeanResidualWrapper, self).__init__(noise_dim=residual_model.noise_dim)
         self.residual_model = residual_model
@@ -630,33 +590,6 @@ class MeanResidualWrapper(StoNetBase):
         residual = self.residual_model.sample(x, sample_size=sample_size, expand_dim=expand_dim)
         return mean + residual
     
-# ---- JOINT MODEL FOR GCM TO COARSE AND SUPER-RESOLUTION ---------------
-
-class GCMCoarseRCMModel(nn.Module):
-    def __init__(self, in_dim, interm_dim, out_dim, num_layer, hidden_dim, noise_dim,
-                 add_bn=False, out_act=None, resblock=True, noise_std=1.0, preproc_layer=False, n_vars=5, time_dim=6, val_dim=None, rank_dim=720, preproc_dim=20):
-        super(GCMCoarseRCMModel, self).__init__()
-        self.coarse_model = StoUNet(in_dim, interm_dim, num_layer - 2, hidden_dim // 10, noise_dim,
-                            add_bn=add_bn, out_act=out_act, resblock=resblock, noise_std=noise_std,
-                            preproc_layer=preproc_layer, n_vars=n_vars, time_dim=time_dim, val_dim=val_dim, 
-                            rank_dim=rank_dim, preproc_dim=preproc_dim)
-        self.super_model = StoUNet(interm_dim, out_dim, num_layer, hidden_dim, noise_dim,
-                            add_bn=add_bn, out_act=None, resblock=resblock, noise_std=noise_std,
-                            preproc_layer=False, n_vars=1, time_dim=6, 
-                            val_dim=None, rank_dim=720, preproc_dim=20)
-        
-    def forward(self, x, return_interm = False, eps=None):
-        x_rcmc = self.coarse_model(x)
-        y = self.super_model(x_rcmc, eps=eps)
-        if return_interm:
-            return y, x_rcmc
-        else:
-            return y
-    
-    def sample(self, x, sample_size=5):
-        x_rcmc = self.coarse_model.sample(x, sample_size = sample_size)
-        y = torch.stack([self.super_model(x_rcmc[:, :, i]) for i in range(sample_size)], dim = -1)
-        return y
     
 # ---- BENCHMARK: LINEAR MODEL --------------------------------
 
@@ -671,42 +604,21 @@ class LinearModel(nn.Module):
     def sample(self, x, sample_size=5):
         return self.forward(x).unsqueeze(-1).expand(-1, -1, sample_size)
     
-# --- HELPER FOR RANK VALUE ------------------------------------
-        
-class RankValModel(nn.Module):
-    def __init__(self, rank_model, val_model):
-        super(RankValModel, self).__init__()
-        self.rank_model = rank_model
-        self.val_model = val_model
-            
-    def forward(self, x):
-        rank = self.rank_model(x)
-        val = self.val_model(x)
-        return torch.cat([rank, val], dim = -1)
-    
-    def sample(self, x, sample_size = 5):
-        rank = self.rank_model.sample(x, sample_size = sample_size)
-        val = self.val_model.sample(x, sample_size = sample_size)
-        return torch.cat([rank, val], dim = -2)
-    
-# ------ HELPER FOR MULTIVARIATE SEQ. --------------------
-
-class MultipleStoUNetWrapper_v2(StoNetBase):
-    def __init__(self, num_models, sto_unet_params, one_hot_dim=7):
-        super(MultipleStoUNetWrapper, self).__init__(noise_dim=sto_unet_params["noise_dim"])
-        self.models = nn.ModuleList([StoUNet(**sto_unet_params) for _ in range(num_models)])
-
-    def forward(self, x, model_index):
-        return self.models[model_index](x)
-    
-    def sample(self, x, model_index, sample_size=5, expand_dim=True):
-        return self.models[model_index].sample(x, sample_size=sample_size, expand_dim=expand_dim)
-    
-    def predict(self, x, model_index, sample_size=5):
-        return self.models[model_index].predict(x, sample_size=sample_size)
-
+# --- HELPER FOR MULTI STEP APPROACH ------------------------------------
 
 class CoarseSuperWrapper(nn.Module):
+    """
+    Wrapper that combines a coarse model and a super-resolution model.
+    Args:
+        coarse_model (nn.Module): the coarse model
+        super_model (nn.Module): the super-resolution model
+        noise_dim_c (int, optional): noise dimension for the coarse model. Defaults to 0.
+        noise_dim_f (int, optional): noise dimension for the super model. Defaults to -1, meaning passing the entire noise to the super model.
+        vars_as_channels (bool, optional): whether to treat variables as channels. Defaults to False.
+        n_vars (int, optional): number of variables (only used if vars_as_channels is True). Defaults to 1.
+        one_hot_in_super (bool, optional): whether to add one-hot encoding in the super model. Defaults to False.
+        one_hot_dim (int, optional): dimension of the one-hot encoding. Defaults to 7.
+    """
     def __init__(self, coarse_model, super_model,
                  noise_dim_c = 0, noise_dim_f = -1, vars_as_channels=False, n_vars=1,
                  one_hot_in_super=False, one_hot_dim=7):
@@ -721,7 +633,6 @@ class CoarseSuperWrapper(nn.Module):
         self.one_hot_dim = one_hot_dim
         
     def forward(self, x, return_interm = False, eps=None, x_onehot=None):
-        # def add_one_hot(xc, one_hot_in_super=False, conv=False, x=None, one_hot_dim=0):
 
         if self.noise_dim_c == 0 or eps is None:
             # either no noise needed or no noise provided for coarse model
@@ -731,8 +642,8 @@ class CoarseSuperWrapper(nn.Module):
             x_rcmc = self.coarse_model(x, eps=eps1)
         
         if self.noise_dim_f == -1 or eps is None:
-            # case eps is None: no noise provided, also won't pass anything on
-            # case noise_dim_f is None: just pass the entire noise to the super model
+            # case eps is None: no noise provided, so also set eps for super model to None
+            # case noise_dim_f is -1: just pass the entire noise to the super model
             eps2 = eps
         else:
             assert eps.size(1) == self.noise_dim_c + self.noise_dim_f
@@ -806,6 +717,14 @@ class CoarseSuperWrapper(nn.Module):
 
 
 class ModelSpec:
+    """Model specifications.
+    Args:
+        model (nn.Module): the model
+        vars_as_channels (bool, optional): whether to treat variables as channels. Defaults to False.
+        use_one_hot (bool, optional): whether to use one-hot encoding. Defaults to False.
+        noise_dim (int, optional): noise dimension. None = no noise, -1 = pass all remaining noise. Defaults to None.
+        one_hot_option (str, optional): how to use one-hot encoding. "concat" = concatenate to input; "argument" = pass as argument to model. Defaults to "concat".
+    """
     def __init__(self, model, vars_as_channels=False, use_one_hot=False, noise_dim=None, one_hot_option="concat"):
         self.model = model
         self.vars_as_channels = vars_as_channels
@@ -814,6 +733,14 @@ class ModelSpec:
         self.one_hot_option = one_hot_option
 
 class HierarchicalWrapper(nn.Module):
+    """
+    Wrapper that combines multiple models in a hierarchical manner.
+    Generalizes CoarseSuperWrapper to multiple models.
+    Args:
+        model_specs (list of ModelSpec): list of model specifications
+        n_vars (int, optional): number of variables (only used if vars_as_channels is True). Defaults to 1.
+        one_hot_dim (int, optional): dimension of the one-hot encoding. Defaults to 0.
+    """
     def __init__(self, model_specs, n_vars=1, one_hot_dim=0):
         super().__init__()
         self.model_specs = model_specs  # list of ModelSpec
@@ -858,68 +785,6 @@ class HierarchicalWrapper(nn.Module):
         if return_intermediates:
             return out, intermediates
         return out
-
-    # def forward(self, x, eps=None, x_onehot=None, cls_ids=None, return_intermediates=False):
-    #     out = x
-    #     intermediates = []
-    #     noise_cursor = 0
-
-    #     for spec in self.model_specs:
-    #         model = spec.model
-    #         # Noise extraction
-    #         if spec.noise_dim is None or eps is None:
-    #             eps_input = None
-    #         elif spec.noise_dim == -1:
-    #             eps_input = eps[:, noise_cursor:] if eps is not None else None
-    #             noise_cursor = eps.shape[1]
-    #         else:
-    #             eps_input = eps[:, noise_cursor:noise_cursor + spec.noise_dim]
-    #             noise_cursor += spec.noise_dim
-
-    #         # Input reshaping
-    #         if spec.vars_as_channels:
-    #             out = out.view(out.size(0), self.n_vars, -1)
-
-    #         # One-hot concatenation
-    #         if spec.use_one_hot and x_onehot is not None and spec.one_hot_option == "concat":
-    #             out = add_one_hot(out, one_hot_in_super=True, conv=spec.vars_as_channels,
-    #                               x=x_onehot, one_hot_dim=self.one_hot_dim)
-
-    #         # Forward pass
-    #         if spec.one_hot_option == "concat" or not spec.use_one_hot:
-    #             if eps_input is not None:
-    #                 out = model(out, eps=eps_input)
-    #             else:
-    #                 out = model(out)
-    #         elif spec.one_hot_option == "argument" and spec.use_one_hot and cls_ids is not None:
-    #             out = model(out, cls_ids=cls_ids)
-
-    #         if return_intermediates:
-    #             intermediates.append(out)
-
-    #     if return_intermediates:
-    #         return out, intermediates
-    #     return out
-
-
-    # def sample(self, x, sample_size=5, x_onehot=None):
-    #     samples = []
-    #     for i in range(sample_size):
-    #         out = x
-    #         for spec in self.model_specs:
-    #             model = spec.model
-                
-    #             if spec.vars_as_channels:
-    #                 out = out.view(out.size(0), self.n_vars, -1)
-    #             if spec.use_one_hot and x_onehot is not None:
-    #                 out = add_one_hot(out, one_hot_in_super=True, conv=spec.vars_as_channels,
-    #                                   x=x_onehot, one_hot_dim=self.one_hot_dim)
-    #             out = model.sample(out, sample_size=1)                
-    #             out = out.squeeze(-1) # if out.dim() > 3 else out
-                
-    #         samples.append(out)
-
-    #     return torch.stack(samples, dim=-1)
 
     def forward(self, x, eps=None, x_onehot=None, cls_ids=None, return_intermediates=False):
         # Just reuse the helper for all models
@@ -968,7 +833,13 @@ class HierarchicalWrapper(nn.Module):
         else:
             return torch.cat(outputs, dim=-1)
 
+# ------------- HELPERS FOR MULTIVARIATE MODELS ------------------------------
+
 class SequentialWrapper(nn.Module):
+    """
+    Wrapper that combines multiple models in a sequential manner for multivariate outputs.
+    Each model corresponds to one variable and takes as input the original input plus the outputs of previous variables.
+    """
     def __init__(self, models_per_var):
         super().__init__()
         self.models_per_var = models_per_var
@@ -1008,18 +879,39 @@ class SequentialWrapper(nn.Module):
     def forward_temporal(self, x, eps=None, start_xc=None):
         pass
 
-class MLPConvWrapper(nn.Module):
-    def __init__(self, mlp_model, conv_model):
-        super().__init__()
-        self.mlp_model = mlp_model
-        self.conv_model = conv_model
+# ------------- HELPER FOR COARSE MODEL TRAINING OPTIONS ------------------------------
+
+class MultipleStoUNetWrapper(StoNetBase):
+    def __init__(self, num_models, sto_unet_params, one_hot_dim=7):
+        super(MultipleStoUNetWrapper, self).__init__(noise_dim=sto_unet_params["noise_dim"])
+        self.models = nn.ModuleList([StoUNet(**sto_unet_params) for _ in range(num_models)])
+        self.one_hot_dim = one_hot_dim
+
+    def forward(self, x, model_index):
+        x_vals = x[:, :-self.one_hot_dim]
+        return self.models[model_index](x_vals)
     
-    def forward(self, x):
-        x_mlp = self.mlp_model(x)
-        x_conv = self.conv_model(x_mlp)
-        return x_conv
+    def sample(self, x, model_index, sample_size=5, expand_dim=True):
+        x_vals = x[:, :-self.one_hot_dim]
+        return self.models[model_index].sample(x_vals, sample_size=sample_size, expand_dim=expand_dim)
     
-    def sample(self, x, sample_size=5):
-        x_mlp = self.mlp_model.sample(x, sample_size=sample_size)
-        x_conv = torch.stack([self.conv_model(x_mlp[:, :, i]) for i in range(sample_size)], dim = -1)
-        return x_conv
+    def predict(self, x, model_index, sample_size=5):
+        x_vals = x[:, :-self.one_hot_dim]
+        return self.models[model_index].predict(x_vals, sample_size=sample_size)
+    
+    
+class MeanResidualWrapper(StoNetBase):
+    def __init__(self, mean_model, residual_model):
+        super(MeanResidualWrapper, self).__init__(noise_dim=residual_model.noise_dim)
+        self.residual_model = residual_model
+        self.mean_model = mean_model
+        
+    def forward(self, x, eps=None):
+        mean = self.mean_model(x)
+        residual = self.residual_model(x, eps=eps)
+        return mean + residual
+    
+    def sample(self, x, sample_size=5, expand_dim=True):
+        mean = self.mean_model(x).unsqueeze(-1).tile((1,1,sample_size))
+        residual = self.residual_model.sample(x, sample_size=sample_size, expand_dim=expand_dim)
+        return mean + residual
