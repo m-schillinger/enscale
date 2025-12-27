@@ -114,6 +114,7 @@ def get_config():
     parser.add_argument('--resume_epoch', type=int, default=0)
     parser.add_argument('--sqrt_transform_out', action='store_true')
     parser.add_argument('--sqrt_transform_in', action='store_true')
+    parser.add_argument('--calc_raw_loss', action='store_true', help="calculate loss also in raw data space")
     
     # only for rank-values
     parser.add_argument('--log_odds_transform', action='store_true', help="whether to apply log-odds transform to the ranks")
