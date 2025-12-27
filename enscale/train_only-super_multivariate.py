@@ -3,14 +3,14 @@ import os
 import random
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
-from modules import StoUNet, RankValModel, LinearModel, GCMCoarseRCMModel, MLPConvWrapper
+from modules import StoUNet
 from modules_cnn import Generator16x, Generator4x, Generator4xConcat, Generator2x
-from modules_loc_variant import RectUpsampleWithResiduals, RectUpsampler
+from modules_loc_variant import RectUpsampleWithResiduals
 from loss_func import energy_loss_two_sample, avg_constraint_per_var, energy_loss_multivariate_summed, norm_loss_multivariate_summed
 import torch.nn.functional as F
 import torch.linalg as LA
 
-from data import get_data, get_data_2step, get_data_2step_naive_avg
+from data import get_data_2step_naive_avg
 from config import get_config
 from utils import *
 import sys
@@ -130,34 +130,30 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
                     gen = current_model.sample(xc_te, cls_ids=cls_ids, sample_size=5)
                 else:
                     gen = current_model.sample(xc_te, sample_size=5)
-            try:                
-                gen_raw_allvars_list = []
-                for i in range(len(args.variables)):
-                    
-                    if norm_stats is not None:
-                        norm_stats_var = norm_stats[args.variables[i]]
-                    else:
-                        norm_stats_var = None
-                    
-                    gen_raw_var_list = []
-                    for j in range(5):
-                        if len(gen.shape) == 4: # 
-                            gen_var_sample = gen[:, i, :, j]
-                        elif len(gen.shape) == 3:
-                            dim_per_var = gen.size(1) // len(args.variables)
-                            gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
-                        gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
-                                            norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=args.sep_mean_std,
-                                            logit=logit, normal=normal)
-                        gen_raw_var_list.append(gen_raw)
-                        
-                    gen_raw_var = torch.stack(gen_raw_var_list, dim=-1)
-                    gen_raw_allvars_list.append(gen_raw_var)
-                gen_raw_allvars = torch.stack(gen_raw_allvars_list, dim=1)        
+            gen_raw_allvars_list = []
+            for i in range(len(args.variables)):
                 
-            except RuntimeError:
-                pdb.set_trace()
-
+                if norm_stats is not None:
+                    norm_stats_var = norm_stats[args.variables[i]]
+                else:
+                    norm_stats_var = None
+                
+                gen_raw_var_list = []
+                for j in range(5):
+                    if len(gen.shape) == 4: # 
+                        gen_var_sample = gen[:, i, :, j]
+                    elif len(gen.shape) == 3:
+                        dim_per_var = gen.size(1) // len(args.variables)
+                        gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
+                    gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
+                                        norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=args.sep_mean_std,
+                                        logit=logit, normal=normal)
+                    gen_raw_var_list.append(gen_raw)
+                    
+                gen_raw_var = torch.stack(gen_raw_var_list, dim=-1)
+                gen_raw_allvars_list.append(gen_raw_var)
+            gen_raw_allvars = torch.stack(gen_raw_allvars_list, dim=1)        
+                
             if output_mode == "y":
                 y = y_te
             elif output_mode == "xc":
@@ -327,20 +323,20 @@ if __name__ == '__main__':
                                                             run_indices=args.run_indices,
                                                             variables=args.variables, 
                                                             variables_lr=args.variables_lr,
-                                            batch_size=args.batch_size,
-                                            norm_input=args.norm_method_input, norm_output=args.norm_method_output,
-                                            sqrt_transform_in=args.sqrt_transform_in, sqrt_transform_out=args.sqrt_transform_out,
-                                            kernel_size=args.kernel_size_lr, 
-                                            kernel_size_hr=args.kernel_size_hr,
-                                            clip_quantile=args.clip_quantile_data,
-                                            tr_te_split=args.tr_te_split, 
-                                            logit=args.logit_transform,
-                                            normal=args.normal_transform,
-                                            server=args.server,
-                                            stride_lr=args.stride_lr,
-                                            padding_lr=args.padding_lr,
-                                            filter_outliers=args.filter_outliers,
-                                            precip_zeros=args.precip_zeros)
+                                                            batch_size=args.batch_size,
+                                                            norm_input=args.norm_method_input, norm_output=args.norm_method_output,
+                                                            sqrt_transform_in=args.sqrt_transform_in, sqrt_transform_out=args.sqrt_transform_out,
+                                                            kernel_size=args.kernel_size_lr, 
+                                                            kernel_size_hr=args.kernel_size_hr,
+                                                            clip_quantile=args.clip_quantile_data,
+                                                            tr_te_split=args.tr_te_split, 
+                                                            logit=args.logit_transform,
+                                                            normal=args.normal_transform,
+                                                            server=args.server,
+                                                            stride_lr=args.stride_lr,
+                                                            padding_lr=args.padding_lr,
+                                                            filter_outliers=args.filter_outliers,
+                                                            precip_zeros=args.precip_zeros)
     print('#training batches:', len(train_loader))
     
     x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))

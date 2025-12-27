@@ -3,10 +3,10 @@ import os
 import random
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
-from modules import StoUNet, StoEncNet, RankValModel, LinearModel, GCMCoarseRCMModel, MultipleStoUNetWrapper, MeanResidualWrapper
-from loss_func import energy_loss_two_sample, energy_loss_rk_val_wrapper, ridge_loss, energy_loss_2step, energy_loss_coarse_wrapper, avg_constraint, norm_loss, norm_loss_multivariate_summed
+from modules import StoUNet, LinearModel, MultipleStoUNetWrapper, MeanResidualWrapper
+from loss_func import energy_loss_two_sample, norm_loss_multivariate_summed
 
-from data import get_data, get_data_2step, get_data_2step_naive_avg
+from data import get_data_2step_naive_avg
 from config import get_config
 from utils import *
 import sys
@@ -38,15 +38,6 @@ def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None,sqrt_
         else:
             dim_per_var = gen.size(1) // len(args.variables)
             y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-
-        # if mode_unnorm == "hr":
-        #     gen_var = gen_var.view(gen_var.shape[0], 1, 128, 128)
-        #     gen_var2 = gen_var2.view(gen_var2.shape[0], 1, 128, 128)
-        #     y_var = y_var.view(y_var.shape[0], 1, 128, 128)
-        # elif mode_unnorm == "hr_avg":
-        #     gen_var = gen_var.view(gen_var.shape[0], 1, 8, 8)
-        #     gen_var2 = gen_var2.view(gen_var2.shape[0], 1, 8, 8)
-        #     y_var = y_var.view(y_var.shape[0], 1, 8, 8)
         
         if norm_stats is not None:
             norm_stats_var = norm_stats[args.variables[i]]
@@ -334,9 +325,6 @@ if __name__ == '__main__':
             name_str = "_sqrt"
         else:
             name_str = ""
-        #if args.norm_method_output == "normalise_pw":
-        #    ns_path = os.path.join(args.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_pixelwise_" + args.variables[i] + "_train_ALL" + name_str + ".pt")
-        #    norm_stats[args.variables[i]] = torch.load(ns_path, map_location=device)
         if args.norm_method_output == "normalise_pw":
             norm_stats[args.variables[i]] = None
         elif args.norm_method_output == "normalise_scalar":
@@ -404,23 +392,6 @@ if __name__ == '__main__':
                             [720  for k in range(n_vars)] +
                             [5, 7]),
                         preproc_dim=args.preproc_dim, layer_shrinkage=args.layer_shrinkage).to(device)
-            
-            # BEFORE
-            #if args.kernel_size_lr == 16 or args.kernel_size_lr == 32 or args.kernel_size_lr == 64:
-                # old version
-                # model = StoEncNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, args.noise_dim,
-                #                add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
-                #                preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
-                #                rank_dim=720, preproc_dim=args.preproc_dim, layer_growth=args.layer_shrinkage).to(device)
-            #    model = StoUNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, args.noise_dim,
-            #                     add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
-            #                     preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
-            #                    rank_dim=720, preproc_dim=args.preproc_dim, layer_shrinkage=args.layer_shrinkage).to(device)
-            #elif args.kernel_size_lr == 4 or args.kernel_size_lr == 8 or args.kernel_size_lr == 2:
-            #    model = StoUNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, args.noise_dim,
-            #                    add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
-            #                    preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
-            #                    rank_dim=720, preproc_dim=args.preproc_dim, layer_shrinkage=args.layer_shrinkage).to(device)
         
         optimizer_coarse = torch.optim.Adam(model.parameters(), lr=args.lr)
         print(f'Built a model with #params: {count_parameters(model)}')           
@@ -462,11 +433,6 @@ if __name__ == '__main__':
     
         else:
             if args.kernel_size_lr == 16 or args.kernel_size_lr == 32 or args.kernel_size_lr == 64:
-                # old version
-                # model = StoEncNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, 0,
-                #                add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
-                #                preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
-                #                rank_dim=720, preproc_dim=args.preproc_dim, layer_growth=args.layer_shrinkage).to(device)
                 model = StoUNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, 0,
                                  add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
                                  preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
@@ -477,9 +443,6 @@ if __name__ == '__main__':
                                 preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
                                 rank_dim=720, preproc_dim=args.preproc_dim, layer_shrinkage=args.layer_shrinkage).to(device)
         
-        #    def __init__(self, in_dim, out_dim, num_layer=2, hidden_dim=100, 
-        #          noise_dim=100, add_bn=True, out_act=None, resblock=False, noise_std=1,
-        #          preproc_layer=False, n_vars=5, time_dim=6, val_dim=None, rank_dim=720, preproc_dim=20):
         
             optimizer_coarse = torch.optim.Adam(model.parameters(), lr=args.lr)
             print(f'Built a model with #params: {count_parameters(model)}')            
@@ -499,12 +462,12 @@ if __name__ == '__main__':
         assert not args.split_coarse_model
         assert args.kernel_size_lr >= 16
         
-        mean_model = StoEncNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, 0,
+        mean_model = StoUNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, 0,
                                 add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
                                 preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
                                 rank_dim=720, preproc_dim=args.preproc_dim, layer_growth=args.layer_shrinkage).to(device)
         
-        residual_model = StoEncNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, args.noise_dim,
+        residual_model = StoUNet(in_dim, interm_dim, args.num_layer, args.hidden_dim, args.noise_dim,
                                 add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
                                 preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
                                 rank_dim=720, preproc_dim=args.preproc_dim, layer_growth=args.layer_shrinkage).to(device)
@@ -658,7 +621,11 @@ if __name__ == '__main__':
             
             # ----------- GET RAW LOSS ------------------
             
-            if args.kernel_size_lr == 16 and args.norm_method_output != "uniform_per_model":
+            if args.calc_raw_loss and args.kernel_size_lr == 16 and args.norm_method_output != "uniform_per_model":
+                # compute loss on original scale
+                # allows comparisons across different data normalisation methods
+                # but requires pre-computed norm stats also on coarsened HR scale
+                # also is rather slow depending on the normalisation method
                 if epoch_idx == 0 or ((epoch_idx + 1) % (args.print_every_nepoch * 25) == 0):
                     if n_batches_raw < 3:    
                         n_batches_raw +=1
@@ -670,8 +637,6 @@ if __name__ == '__main__':
                                 gen1_var = x_coarse[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 gen2_var = x_coarse_p[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 
-                                """
-                                # remove this for flexibility
                                 y_raw = unnormalise(xc_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
                                                     norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]],
                                                     logit=args.logit_transform)
@@ -681,13 +646,8 @@ if __name__ == '__main__':
                                 gen2_raw = unnormalise(gen2_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
                                                     norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]], sep_mean_std=args.sep_mean_std,
                                                     logit=args.logit_transform)
-                                """
-                                y_raw = unnormalise(xc_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=False, 
-                                                    norm_method=None, norm_stats=None, logit=False)
-                                gen1_raw = unnormalise(gen1_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=False, 
-                                                    norm_method=None, norm_stats=None, sep_mean_std=False, logit=False)
-                                gen2_raw = unnormalise(gen2_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=False, 
-                                                    norm_method=None, norm_stats=None, sep_mean_std=False, logit=False)
+                                
+                                # for simplicity, sum across variables
                                 loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_raw, gen1_raw, gen2_raw, verbose=True, beta=args.beta)
                                 loss_tr_raw += loss_raw.item()
                                 s1_tr_raw += s1_raw.item()
@@ -867,13 +827,6 @@ if __name__ == '__main__':
             visual_sample(model, x_te_eval, xc_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse_loss-scale', norm_method=None, norm_stats=None,
                     square_data=False, sqrt_transform=args.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=False, xc_prev=xc_prev_te)
 
-            #if args.kernel_size_lr == 16:
-            #    if args.norm_method_output is not None and args.norm_method_output != "uniform_per_model": # transforming not implemented for uniform per model    
-            #        visual_sample(model, x_tr_eval, xc_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_coarse_raw', norm_method=args.norm_method_output, norm_stats=norm_stats,
-            #                square_data=False, sqrt_transform=args.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=args.logit_transform, xc_prev=xc_prev_tr)
-            #        visual_sample(model, x_te_eval, xc_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse_raw', norm_method=args.norm_method_output, norm_stats=norm_stats,
-            #                square_data=False, sqrt_transform=args.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=args.logit_transform, xc_prev=xc_prev_te)
-
             losses_to_img(save_dir, f"log_coarse.txt", "crs", "_coarse")
 
             
@@ -883,12 +836,6 @@ if __name__ == '__main__':
             trues, samples = get_eval_samples(model, current_test_loader, mode_unnorm=mode_unnorm, norm_stats=None, input_mode = "x", output_mode = "xc", norm_method=None, temporal=temporal)
             for i in range(len(args.variables)):
                 plot_rh(trues[:, i, :, :], samples[:, i, :, :, :], epoch_idx, save_dir, file_suffix=f"_coarse-var-{args.variables[i]}")
-            
-            #if len(args.variables) == 1 and args.kernel_size_lr == 16 and args.norm_method_output != "uniform_per_model": # again not implemented for uniform per model
-            #    # eval on raw data scale
-            #    trues, samples = get_eval_samples(model, current_test_loader, mode_unnorm=mode_unnorm, norm_stats=norm_stats, input_mode = "x", output_mode = "xc",
-            #                                    norm_method=args.norm_method_output, logit = args.logit_transform, temporal=temporal)
-            #   plot_rh(trues, samples, epoch_idx, save_dir, file_suffix="_raw-scale_super")
                 
             # ADDED TEMPORARILY
             for i in range(len(args.variables)):
