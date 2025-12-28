@@ -114,10 +114,8 @@ if __name__ == '__main__':
     #### get norm stats file
     norm_stats = {}
     for i in range(len(args.variables)):
-        if args.predict_lr:
-            mode_unnorm = "lr"
-        else:
-            mode_unnorm = "hr"
+
+        mode_unnorm = "hr"
         if args.variables[i] in ["pr", "sfcWind"] and args.sqrt_transform_out:
             name_str = "_sqrt"
         else:
@@ -140,10 +138,7 @@ if __name__ == '__main__':
         if args.variables_lr is not None:
             n_vars = len(args.variables_lr)
         else:
-            if args.coarsened_hr:
-                n_vars = 2
-            else:
-                n_vars = 5
+            n_vars = 5
         if args.norm_method_output != "rank_val":
             in_dim = x_tr_eval.shape[1]
             out_dim = y_tr_eval.shape[-2] * y_tr_eval.shape[-1]

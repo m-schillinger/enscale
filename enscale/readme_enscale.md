@@ -26,7 +26,7 @@ Normalisation options (all of them are done separately for each climate variable
 
 ## If you want to re-train with your own data
 
-1. Preprocess data or compute normalisation statistics (see above).
+1. Preprocess data or compute normalisation statistics (see template in `compute_norm_stats.ipynb`).
 2. Adjust dataloading with your paths to the data.
 
 **More will follow.**

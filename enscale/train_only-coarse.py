@@ -251,7 +251,6 @@ if __name__ == '__main__':
                                             test_size=1-args.tr_te_split_ratio,
                                             logit=args.logit_transform,
                                             normal=args.normal_transform,
-                                            old_data=args.old_data,
                                             only_winter=args.only_winter,
                                             server=args.server,
                                             return_timepair=return_timepair,
@@ -442,7 +441,6 @@ if __name__ == '__main__':
                                 add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
                                 preproc_layer=args.preproc_layer, n_vars=n_vars, time_dim=5, val_dim=val_dim, 
                                 rank_dim=720, preproc_dim=args.preproc_dim, layer_shrinkage=args.layer_shrinkage).to(device)
-        
         
             optimizer_coarse = torch.optim.Adam(model.parameters(), lr=args.lr)
             print(f'Built a model with #params: {count_parameters(model)}')            
