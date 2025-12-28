@@ -215,29 +215,29 @@ class LossConfig:
     patch_size: int = 8
     calc_raw_loss: bool = False
 
-def __post_init__(self):
-        # floats
-        self.lambda_norm_loss_loc = float(self.lambda_norm_loss_loc)
-        self.lambda_coarse = float(self.lambda_coarse)
-        self.beta = float(self.beta)
-        self.beta_norm_loss = float(self.beta_norm_loss)
-        self.patch_size = int(self.patch_size)
+    def __post_init__(self):
+            # floats
+            self.lambda_norm_loss_loc = float(self.lambda_norm_loss_loc)
+            self.lambda_coarse = float(self.lambda_coarse)
+            self.beta = float(self.beta)
+            self.beta_norm_loss = float(self.beta_norm_loss)
+            self.patch_size = int(self.patch_size)
 
-        # optional lists
-        self.p_norm_loss_loc = self._coerce_optional_float_list(self.p_norm_loss_loc)
-        self.p_norm_loss_batch = self._coerce_optional_float_list(self.p_norm_loss_batch)
+            # optional lists
+            self.p_norm_loss_loc = self._coerce_optional_float_list(self.p_norm_loss_loc)
+            self.p_norm_loss_batch = self._coerce_optional_float_list(self.p_norm_loss_batch)
 
-@staticmethod
-def _coerce_optional_float_list(val):
-    if val is None:
-        return None
-    if isinstance(val, str) and val.lower() == "none":
-        return None
-    if isinstance(val, (int, float)):
-        return [float(val)]
-    if isinstance(val, list):
-        return [float(v) for v in val]
-    raise TypeError(f"Invalid type for optional float list: {type(val)}")
+    @staticmethod
+    def _coerce_optional_float_list(val):
+        if val is None:
+            return None
+        if isinstance(val, str) and val.lower() == "none":
+            return None
+        if isinstance(val, (int, float)):
+            return [float(val)]
+        if isinstance(val, list):
+            return [float(v) for v in val]
+        raise TypeError(f"Invalid type for optional float list: {type(val)}")
 
 # -------------------------
 # Location-specific layers

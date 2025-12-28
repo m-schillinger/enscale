@@ -65,10 +65,10 @@ model:
 loss:
     avg_constraint: False
     max_loss: False
-    norm_loss: True
-    norm_loss_loc: True
+    norm_loss: False
+    norm_loss_loc: False
     lambda_norm_loss_loc: 1.0
-    norm_loss_batch: True
+    norm_loss_batch: False
     agg_norm_loss: "mean"
     norm_loss_per_var: False
     p_norm_loss_loc: [4]
@@ -104,7 +104,7 @@ training:
     batch_size: 512
     num_epochs: 500
     lr: 1e-4
-    weight_decay: 1e-3
+    weight_decay: 0
     alpha: 1.0
     burn_in: 0
     save_model_every: 50
