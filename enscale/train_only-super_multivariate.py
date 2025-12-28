@@ -42,7 +42,8 @@ def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None, sqrt
                 gen, y_interm = model(x, return_latent=True)
                 gen2, y_interm2 = model(x, return_latent=True)
         elif args.nicolai_layers and one_hot_in_super:
-            cls_ids = get_run_index_from_onehot(x_one_hot[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
+            cls_ids = torch.from_numpy(
+                get_run_index_from_onehot(x_one_hot[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(x.device)
             gen, y_upsampled = model(x, cls_ids=cls_ids, return_mean=True)
             gen2, y_upsampled2 = model(x, cls_ids=cls_ids, return_mean=True)
             y_interm = gen - y_upsampled.view(gen.shape[0], -1)
@@ -414,9 +415,7 @@ if __name__ == '__main__':
             assert not args.conv and not args.conv_concat
             assert len(args.variables) == 1
         
-        if args.mlp_conv:
-            raise NotImplementedError
-        elif args.conv and args.kernel_size_lr == 16 and args.kernel_size_hr == 1:
+        if args.conv and args.kernel_size_lr == 16 and args.kernel_size_hr == 1:
             assert not args.conv_concat
             print("building 16x conv model")
             assert not args.one_hot_in_super # not implemented yet
@@ -440,12 +439,18 @@ if __name__ == '__main__':
         elif args.nicolai_layers:
             if args.one_hot_in_super:
                 num_classes = 8
+                if args.one_hot_only_in_ups:
+                    num_classes_resid = 1
+                else:
+                    num_classes_resid = 8
             else:
                 num_classes = 1
+                num_classes_resid = 1
             model = RectUpsampleWithResiduals(128//args.kernel_size_lr, 
                             128 // args.kernel_size_hr,
                             n_features=len(args.variables),
                             num_classes=num_classes,
+                            num_classes_resid=num_classes_resid,
                             num_neighbors_ups=args.num_neighbors_ups,
                             num_neighbors_res=args.num_neighbors_res,
                             map_dim=args.latent_dim,
@@ -456,8 +461,6 @@ if __name__ == '__main__':
                             double_linear=args.double_linear,
                             split_residuals=not args.not_split_residuals
                             ).to(device)
-            # change to one hot dim later
-            
             if args.add_intermediate_loss:
                 assert args.latent_dim == len(args.variables)
             
@@ -523,7 +526,8 @@ if __name__ == '__main__':
                 
             if args.nicolai_layers:
                 if args.one_hot_in_super:
-                    cls_ids = get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
+                    cls_ids = torch.from_numpy(
+                        get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(xc.device)
                     #x[:, -one_hot_dim:]
                 else:
                     cls_ids = None
@@ -684,8 +688,9 @@ if __name__ == '__main__':
                             
                         if args.nicolai_layers:
                             if args.one_hot_in_super:
-                                cls_ids = get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
-                                #x_te[:, -one_hot_dim:]
+                                cls_ids = torch.from_numpy(
+                                    get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
+                                ).to(xc_te.device)
                             else:
                                 cls_ids = None
                         
