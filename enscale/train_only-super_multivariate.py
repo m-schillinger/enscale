@@ -11,7 +11,8 @@ import torch.nn.functional as F
 import torch.linalg as LA
 
 from data import get_data_2step_naive_avg
-from config import get_config
+import argparse
+from load_config import load_config
 from utils import *
 import sys
 import pdb
@@ -21,27 +22,27 @@ sys.path.append("..")
 
 def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None, sqrt_transform=True, square_data=False, mode_unnorm = "hr", 
                   one_hot_dim=None, logit=False, normal=False, fft=False, one_hot_in_super=False, conv=False, x_one_hot=None):
-    if not args.dropout:
+    if not cfg.model.dropout:
         model.eval()
     with torch.no_grad():
-        if not args.conv and not args.conv_concat:
+        if not cfg.model.conv and not cfg.model.conv_concat:
             x = x.view(x.shape[0], -1)
             y = y.view(y.shape[0], -1)
-        if args.add_x_in_super: # DIRTY
+        if cfg.model.add_x_in_super: # DIRTY
             x = torch.cat([x, x_one_hot[:, :720]], dim=1)
         
-        if not args.nicolai_layers:
+        if not cfg.model.nicolai_layers:
             x = add_one_hot(x, one_hot_in_super=one_hot_in_super, conv=conv, x=x_one_hot, one_hot_dim=one_hot_dim)
         
-        if args.latent_dim == len(args.variables) and args.nicolai_layers and args.add_intermediate_loss:
+        if cfg.sparse_layers.latent_dim == len(cfg.data.variables) and cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss:
             plot_intermediate = True
-            if args.double_linear:
+            if cfg.sparse_layers.double_linear:
                 gen, _, y_interm = model(x, return_latent=True)
                 gen2, _, y_interm2 = model(x, return_latent=True)
             else:
                 gen, y_interm = model(x, return_latent=True)
                 gen2, y_interm2 = model(x, return_latent=True)
-        elif args.nicolai_layers and one_hot_in_super:
+        elif cfg.model.nicolai_layers and one_hot_in_super:
             cls_ids = torch.from_numpy(
                 get_run_index_from_onehot(x_one_hot[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(x.device)
             gen, y_upsampled = model(x, cls_ids=cls_ids, return_mean=True)
@@ -49,7 +50,7 @@ def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None, sqrt
             y_interm = gen - y_upsampled.view(gen.shape[0], -1)
             y_interm2 = gen2 - y_upsampled2.view(gen.shape[0], -1)
             plot_intermediate = True
-        elif args.nicolai_layers:
+        elif cfg.model.nicolai_layers:
             gen, y_upsampled = model(x, return_mean=True)
             gen2, y_upsampled2 = model(x, return_mean=True)
             y_interm = gen - y_upsampled.view(gen.shape[0], -1)
@@ -59,49 +60,49 @@ def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None, sqrt
             plot_intermediate = False
             gen = model(x)
             gen2 = model(x)    
-    for i in range(len(args.variables)):
+    for i in range(len(cfg.data.variables)):
         if len(gen.shape) == 3:
             gen_var = gen[:, i, :]
             gen_var2 = gen2[:, i, :]
         else:
-            dim_per_var = gen.size(1) // len(args.variables)
+            dim_per_var = gen.size(1) // len(cfg.data.variables)
             gen_var = gen[:, i * dim_per_var:(i + 1) * dim_per_var]
             gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
             
         if len(y.shape) == 3:
             y_var = y[:, i, :]
         else:
-            dim_per_var = gen.size(1) // len(args.variables)
+            dim_per_var = gen.size(1) // len(cfg.data.variables)
             y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
         
         if norm_stats is not None:
-            norm_stats_var = norm_stats[args.variables[i]]
+            norm_stats_var = norm_stats[cfg.data.variables[i]]
         else:
             norm_stats_var = None
-        gen_var = unnormalise(gen_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
+        gen_var = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
                     final_square=square_data, logit=logit, normal=normal).unsqueeze(1)
-        gen_var2 = unnormalise(gen_var2, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var,
+        gen_var2 = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var,
                     final_square=square_data, logit=logit, normal=normal).unsqueeze(1) 
-        y_var = unnormalise(y_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
+        y_var = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
                            final_square=square_data, logit=logit, normal=normal).unsqueeze(1)
         
         if plot_intermediate and norm_stats_var is None:
             # shape of intermediate (B, npix, map_dim) 
-            intermediate_var = y_interm[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm.shape[0], 1, 128 // args.kernel_size_hr, 128 // args.kernel_size_hr)
-            intermediate_var2 = y_interm2[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm2.shape[0], 1, 128 // args.kernel_size_hr, 128 // args.kernel_size_hr)
+            intermediate_var = y_interm[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm.shape[0], 1, 128 // cfg.data.kernel_size_hr, 128 // cfg.data.kernel_size_hr)
+            intermediate_var2 = y_interm2[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm2.shape[0], 1, 128 // cfg.data.kernel_size_hr, 128 // cfg.data.kernel_size_hr)
             sample = torch.cat([y_var.cpu(), intermediate_var.cpu(), intermediate_var2.cpu(), gen_var.cpu(), gen_var2.cpu() ])
         else:
             sample = torch.cat([y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
         sample = torch.clamp(sample, torch.quantile(y_var, 0.0005).item(), torch.quantile(y_var, 0.9995).item())
         plt.matshow(make_grid(sample, nrow=y.shape[0]).permute(1, 2, 0)[:,:,0], cmap="rainbow"); plt.axis('off'); 
-        plt.savefig(save_dir + f"_var-{args.variables[i]}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
+        plt.savefig(save_dir + f"_var-{cfg.data.variables[i]}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
         # save_image(sample, save_dir, normalize=True, scale_each=True)
     model.train()
     
 
 def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_method=None, norm_stats=None, 
                      input_mode = "x", output_mode = "y", logit=False, normal=False, one_hot_in_super=False, conv=False, one_hot_dim=None):
-    if not args.dropout:
+    if not cfg.model.dropout:
         current_model.eval()
     samples = []
     trues = []
@@ -112,7 +113,7 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
             x_te, xc_te, y_te = x_te.to(device), xc_te.to(device), y_te.to(device)
             x_te = x_te.view(x_te.shape[0], -1)
             
-            if not args.conv and not args.conv_concat:
+            if not cfg.model.conv and not cfg.model.conv_concat:
                 # x_te = x_te.view(x_te.shape[0], -1)
                 y_te = y_te.view(y_te.shape[0], -1)
                 xc_te = xc_te.view(xc_te.shape[0], -1)
@@ -120,10 +121,10 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
             if input_mode == "x":
                 gen = current_model.sample(x_te, sample_size=5)
             elif input_mode == "xc":
-                if args.add_x_in_super:
+                if cfg.model.add_x_in_super:
                     xc_te = torch.cat([xc_te, x_te[:, :720]], dim=1)
                     
-                if not args.nicolai_layers:
+                if not cfg.model.nicolai_layers:
                     xc_te = add_one_hot(xc_te, one_hot_in_super=one_hot_in_super, conv=conv, x=x_te, one_hot_dim=one_hot_dim)
                     gen = current_model.sample(xc_te, sample_size=5)
                 elif one_hot_in_super:
@@ -132,10 +133,10 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
                 else:
                     gen = current_model.sample(xc_te, sample_size=5)
             gen_raw_allvars_list = []
-            for i in range(len(args.variables)):
+            for i in range(len(cfg.data.variables)):
                 
                 if norm_stats is not None:
-                    norm_stats_var = norm_stats[args.variables[i]]
+                    norm_stats_var = norm_stats[cfg.data.variables[i]]
                 else:
                     norm_stats_var = None
                 
@@ -144,10 +145,10 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
                     if len(gen.shape) == 4: # 
                         gen_var_sample = gen[:, i, :, j]
                     elif len(gen.shape) == 3:
-                        dim_per_var = gen.size(1) // len(args.variables)
+                        dim_per_var = gen.size(1) // len(cfg.data.variables)
                         gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
-                    gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
-                                        norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=args.sep_mean_std,
+                    gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
+                                        norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=cfg.preprocessing.sep_mean_std,
                                         logit=logit, normal=normal)
                     gen_raw_var_list.append(gen_raw)
                     
@@ -162,19 +163,19 @@ def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_
                 
             try:
                 y_te_raw_allvars_list = []
-                for i in range(len(args.variables)):
+                for i in range(len(cfg.data.variables)):
                     
                     if norm_stats is not None:
-                        norm_stats_var = norm_stats[args.variables[i]]
+                        norm_stats_var = norm_stats[cfg.data.variables[i]]
                     else:
                         norm_stats_var = None
                     
                     if len(y.shape) == 3:
                         y_var = y[:, i, :]
                     elif len(y.shape) == 2:
-                        dim_per_var = y.size(1) // len(args.variables)
+                        dim_per_var = y.size(1) // len(cfg.data.variables)
                         y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-                    y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
+                    y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
                                         norm_method=norm_method, norm_stats=norm_stats_var, logit=logit, normal=normal)
                     y_te_raw_allvars_list.append(y_te_raw)
                 y_te_raw_allvars = torch.stack(y_te_raw_allvars_list, dim=1)
@@ -240,49 +241,55 @@ def add_one_hot(xc, one_hot_in_super=False, conv=False, x=None, one_hot_dim=0):
 
 if __name__ == '__main__':
 
-    args = get_config()
+    def parse_args():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--config", type=str, required=True)
+        return parser.parse_args()
+
+    args = parse_args()
+    cfg = load_config(args.config)
     
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
+    random.seed(cfg.general.seed)
+    torch.manual_seed(cfg.general.seed)
+    torch.cuda.manual_seed(cfg.general.seed)
     
     device = torch.device('cuda')
     
-    variables_str = '_'.join(args.variables)
-    if args.kernel_size_lr == 16 and args.kernel_size_hr == 1:
+    variables_str = '_'.join(cfg.data.variables)
+    if cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
         subfolder = "all"
-    elif args.kernel_size_lr == 4 and args.kernel_size_hr == 1:
+    elif cfg.data.kernel_size_lr == 4 and cfg.data.kernel_size_hr == 1:
         subfolder = "super"
-    elif args.kernel_size_lr == 16 and args.kernel_size_hr == 4:
+    elif cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 4:
         subfolder = "coarse"
     else:
-        subfolder = f"lr{args.kernel_size_lr}_hr{args.kernel_size_hr}"
-    if not args.conv and not args.conv_concat and not args.nicolai_layers:
-        if args.server == "ada":
-            save_dir = f"results/{args.method}/super/{subfolder}/var-{variables_str}/hidden{args.hidden_dim}_num-l-{args.num_layer}_layer-shr-{args.layer_shrinkage}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
-        elif args.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{args.variables[0]}/hidden{args.hidden_dim}_num-l-{args.num_layer}_layer-shr-{args.layer_shrinkage}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
-    elif args.nicolai_layers:
-        if args.server == "ada":
+        subfolder = f"lr{cfg.data.kernel_size_lr}_hr{cfg.data.kernel_size_hr}"
+    if not cfg.model.conv and not cfg.model.conv_concat and not cfg.model.nicolai_layers:
+        if cfg.general.server == "ada":
+            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/hidden{cfg.model.hidden_dim}_num-l-{cfg.model.num_layer}_layer-shr-{cfg.model.layer_shrinkage}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        elif cfg.general.server == "euler":
+            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{cfg.data.variables[0]}/hidden{cfg.model.hidden_dim}_num-l-{cfg.model.num_layer}_layer-shr-{cfg.model.layer_shrinkage}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+    elif cfg.model.nicolai_layers:
+        if cfg.general.server == "ada":
             #num_neighbors_ups=9,                          num_neighbours_res=25,                             map_dim=12,                             noise_dim=5,                             mlp_hidden=100,                             mlp_depth=3,                           noise_dim_mlp=0
-            save_dir = f"results/{args.method}/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{args.norm_method_output}{args.save_name}/"
-        elif args.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{args.norm_method_output}_{args.save_name}/"
-    elif args.conv:
-        if args.server == "ada":
-            save_dir = f"results/{args.method}/super/{subfolder}/var-{variables_str}/conv-{args.conv}-dim{args.conv_dim}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
-        elif args.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-{args.conv}-dim{args.conv_dim}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
-    elif args.conv_concat:
-        if args.server == "ada":
-            save_dir = f"results/{args.method}/super/{subfolder}/var-{variables_str}/conv-concat-{args.conv_concat}-dim{args.conv_dim}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
-        elif args.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-concat-{args.conv_concat}-dim{args.conv_dim}_avc-c-{args.avg_constraint}_norm-out-{args.norm_method_output}{args.save_name}/"
+            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        elif cfg.general.server == "euler":
+            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{cfg.preprocessing.norm_method_output}_{cfg.general.save_name}/"
+    elif cfg.model.conv:
+        if cfg.general.server == "ada":
+            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/conv-{cfg.model.conv}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        elif cfg.general.server == "euler":
+            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-{cfg.model.conv}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+    elif cfg.model.conv_concat:
+        if cfg.general.server == "ada":
+            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/conv-concat-{cfg.model.conv_concat}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        elif cfg.general.server == "euler":
+            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-concat-{cfg.model.conv_concat}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
     make_folder(save_dir)
-    write_config_to_file(args, save_dir)
+    write_config_to_file(cfg, save_dir)
     
     def open_log_file(file_name):
-        if args.resume_epoch > 0:
+        if cfg.general.resume_epoch > 0:
             return open(file_name, "at")
         else:
             return open(file_name, "wt")
@@ -313,186 +320,186 @@ if __name__ == '__main__':
     
     
     # get run indices also here
-    if args.server == "ada":
+    if cfg.general.server == "ada":
         root = "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
-    elif args.server == "euler":
+    elif cfg.general.server == "euler":
         root = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
     gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root)
     
     #### load data
-    train_loader, test_loader_in = get_data_2step_naive_avg(n_models=args.n_models, 
-                                                            run_indices=args.run_indices,
-                                                            variables=args.variables, 
-                                                            variables_lr=args.variables_lr,
-                                                            batch_size=args.batch_size,
-                                                            norm_input=args.norm_method_input, norm_output=args.norm_method_output,
-                                                            sqrt_transform_in=args.sqrt_transform_in, sqrt_transform_out=args.sqrt_transform_out,
-                                                            kernel_size=args.kernel_size_lr, 
-                                                            kernel_size_hr=args.kernel_size_hr,
-                                                            clip_quantile=args.clip_quantile_data,
-                                                            tr_te_split=args.tr_te_split, 
-                                                            logit=args.logit_transform,
-                                                            normal=args.normal_transform,
-                                                            server=args.server,
-                                                            stride_lr=args.stride_lr,
-                                                            padding_lr=args.padding_lr,
-                                                            filter_outliers=args.filter_outliers,
-                                                            precip_zeros=args.precip_zeros)
+    train_loader, test_loader_in = get_data_2step_naive_avg(n_models=cfg.data.n_models, 
+                                                            run_indices=cfg.data.run_indices,
+                                                            variables=cfg.data.variables, 
+                                                            variables_lr=cfg.data.variables_lr,
+                                                            batch_size=cfg.training.batch_size,
+                                                            norm_input=cfg.preprocessing.norm_method_input, norm_output=cfg.preprocessing.norm_method_output,
+                                                            sqrt_transform_in=cfg.preprocessing.sqrt_transform_in, sqrt_transform_out=cfg.preprocessing.sqrt_transform_out,
+                                                            kernel_size=cfg.data.kernel_size_lr, 
+                                                            kernel_size_hr=cfg.data.kernel_size_hr,
+                                                            clip_quantile=cfg.data.clip_quantile_data,
+                                                            tr_te_split=cfg.data.tr_te_split, 
+                                                            logit=cfg.preprocessing.logit_transform,
+                                                            normal=cfg.preprocessing.normal_transform,
+                                                            server=cfg.general.server,
+                                                            stride_lr=cfg.data.stride_lr,
+                                                            padding_lr=cfg.data.padding_lr,
+                                                            filter_outliers=cfg.data.filter_outliers,
+                                                            precip_zeros=cfg.data.precip_zeros)
     print('#training batches:', len(train_loader))
     
     x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))
-    x_tr_eval, xc_tr_eval, y_tr_eval = x_tr_eval[:args.n_visual].to(device), xc_tr_eval[:args.n_visual].to(device), y_tr_eval[:args.n_visual].to(device)
+    x_tr_eval, xc_tr_eval, y_tr_eval = x_tr_eval[:cfg.general.n_visual].to(device), xc_tr_eval[:cfg.general.n_visual].to(device), y_tr_eval[:cfg.general.n_visual].to(device)
     x_te_eval, xc_te_eval, y_te_eval = next(iter(test_loader_in))
-    x_te_eval, xc_te_eval, y_te_eval = x_te_eval[:args.n_visual].to(device), xc_te_eval[:args.n_visual].to(device), y_te_eval[:args.n_visual].to(device)
+    x_te_eval, xc_te_eval, y_te_eval = x_te_eval[:cfg.general.n_visual].to(device), xc_te_eval[:cfg.general.n_visual].to(device), y_te_eval[:cfg.general.n_visual].to(device)
     
     #### get norm stats file
-    if args.server == "euler":
-        args.data_dir = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
+    if cfg.general.server == "euler":
+        cfg.data.data_dir = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
     norm_stats = {}
-    for i in range(len(args.variables)):
-        if args.kernel_size_hr == 1:
+    for i in range(len(cfg.data.variables)):
+        if cfg.data.kernel_size_hr == 1:
             mode_unnorm = "hr"
-        elif args.kernel_size_hr == 2:
+        elif cfg.data.kernel_size_hr == 2:
             mode_unnorm = "hr_avg_2"
             # raise NotImplementedError("Kernel size hr: only 1 or 4 are implemented")
-        elif args.kernel_size_hr == 4:
+        elif cfg.data.kernel_size_hr == 4:
             mode_unnorm = "hr_avg_4"
-        elif args.kernel_size_hr == 8:
+        elif cfg.data.kernel_size_hr == 8:
             mode_unnorm = "hr_avg_8"
-        elif args.kernel_size_hr == 16:
+        elif cfg.data.kernel_size_hr == 16:
             mode_unnorm = "hr_avg"
-        elif args.kernel_size_hr == 32:
+        elif cfg.data.kernel_size_hr == 32:
             mode_unnorm = "hr_avg_32"
-        elif args.kernel_size_hr == 64:
+        elif cfg.data.kernel_size_hr == 64:
             mode_unnorm = "hr_avg_64"
-        if args.variables[i] in ["pr", "sfcWind"] and args.sqrt_transform_out:
+        if cfg.data.variables[i] in ["pr", "sfcWind"] and cfg.preprocessing.sqrt_transform_out:
             name_str = "_sqrt"
         else:
             name_str = ""
-        if args.kernel_size_hr == 1:
-            if args.norm_method_output == "normalise_pw":
-                ns_path = os.path.join(args.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_pixelwise_" + args.variables[i] + "_train_ALL" + name_str + ".pt")
-                norm_stats[args.variables[i]] = torch.load(ns_path, map_location=device)
-            elif args.norm_method_output == "normalise_scalar":
-                ns_path = os.path.join(args.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_full-data_" + args.variables[i] + "_train_ALL" + name_str + ".pt")
-                norm_stats[args.variables[i]] = torch.load(ns_path, map_location=device)
-            elif args.norm_method_output == "uniform": #"hr_norm_stats_ecdf_matrix_" + data_type + "_train_" + "ALL" + name_str + ".pt")
+        if cfg.data.kernel_size_hr == 1:
+            if cfg.preprocessing.norm_method_output == "normalise_pw":
+                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_pixelwise_" + cfg.data.variables[i] + "_train_ALL" + name_str + ".pt")
+                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
+            elif cfg.preprocessing.norm_method_output == "normalise_scalar":
+                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_full-data_" + cfg.data.variables[i] + "_train_ALL" + name_str + ".pt")
+                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
+            elif cfg.preprocessing.norm_method_output == "uniform": #"hr_norm_stats_ecdf_matrix_" + data_type + "_train_" + "ALL" + name_str + ".pt")
                 name_str = ""
-                ns_path = os.path.join(args.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_ecdf_matrix_" + args.variables[i] + "_train_SUBSAMPLE" + name_str + ".pt")
-                norm_stats[args.variables[i]] = torch.load(ns_path, map_location=device)
+                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_ecdf_matrix_" + cfg.data.variables[i] + "_train_SUBSAMPLE" + name_str + ".pt")
+                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
             else:
-                norm_stats[args.variables[i]] = None
+                norm_stats[cfg.data.variables[i]] = None
         else:
-            norm_stats[args.variables[i]] = None
+            norm_stats[cfg.data.variables[i]] = None
         
     #### build model
-    if args.method == 'eng_2step':
+    if cfg.model.method == 'eng_2step':
         n_vars = 1
-        assert args.norm_method_output != "rank_val"
+        assert cfg.preprocessing.norm_method_output != "rank_val"
         # in_dim = x_tr_eval.shape[1]
-        if len(args.variables) > 1:
-            out_dim = y_tr_eval.shape[-1] * len(args.variables)
+        if len(cfg.data.variables) > 1:
+            out_dim = y_tr_eval.shape[-1] * len(cfg.data.variables)
         else:
-            if args.fft:
+            if cfg.preprocessing.fft:
                 out_dim = 2 * y_tr_eval.shape[-1]
             else:
                 out_dim = y_tr_eval.shape[-1]
                 
-        if len(args.variables) > 1:
-            interm_dim = xc_tr_eval.shape[-1] * len(args.variables)
+        if len(cfg.data.variables) > 1:
+            interm_dim = xc_tr_eval.shape[-1] * len(cfg.data.variables)
         else:
             interm_dim = xc_tr_eval.shape[-1]
         val_dim = None
         n_channels = xc_tr_eval.shape[1]
-        if args.one_hot_in_super:
+        if cfg.model.one_hot_in_super:
             one_hot_dim = 7
             interm_dim += one_hot_dim
         else:
             one_hot_dim = 0
         
-        if args.add_x_in_super:
+        if cfg.model.add_x_in_super:
             interm_dim += 720
-            assert not args.conv and not args.conv_concat
-            assert len(args.variables) == 1
+            assert not cfg.model.conv and not cfg.model.conv_concat
+            assert len(cfg.data.variables) == 1
         
-        if args.conv and args.kernel_size_lr == 16 and args.kernel_size_hr == 1:
+        if cfg.model.conv and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
             assert not args.conv_concat
             print("building 16x conv model")
-            assert not args.one_hot_in_super # not implemented yet
-            model = Generator16x(conv_dim=args.conv_dim, n_channels=n_channels).to(device)
-        elif args.conv and (args.kernel_size_lr // args.kernel_size_hr == 4):
+            assert not cfg.model.one_hot_in_super # not implemented yet
+            model = Generator16x(conv_dim=cfg.model.conv_dim, n_channels=n_channels).to(device)
+        elif cfg.model.conv and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
             assert not args.conv_concat
             print("building 4x conv model")
-            model = Generator4x(conv_dim=args.conv_dim, n_channels=n_channels, one_hot_channel=args.one_hot_in_super, one_hot_dim=one_hot_dim,
-                                image_size=128//args.kernel_size_lr).to(device)
-        elif args.conv_concat and args.kernel_size_lr == 16 and args.kernel_size_hr == 1:
+            model = Generator4x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
+                                image_size=128//cfg.data.kernel_size_lr).to(device)
+        elif cfg.model.conv_concat and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
             raise NotImplementedError("Concatenating noise for kernel size 16 not implemented yet")
-        elif args.conv_concat and (args.kernel_size_lr // args.kernel_size_hr == 4):
+        elif cfg.model.conv_concat and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
             assert not args.conv
             print("building 4x conv model")
-            model = Generator4xConcat(conv_dim=args.conv_dim, n_channels=n_channels, one_hot_channel=args.one_hot_in_super, one_hot_dim=one_hot_dim,
-                                      num_noise_channels=args.num_noise_channels,
-                                      image_size=128//args.kernel_size_lr).to(device)
-        elif args.conv and (args.kernel_size_lr // args.kernel_size_hr == 2):
+            model = Generator4xConcat(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
+                                      num_noise_channels=cfg.model.num_noise_channels,
+                                      image_size=128//cfg.data.kernel_size_lr).to(device)
+        elif cfg.model.conv and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 2):
             print("building 2x conv model")
-            model = Generator2x(conv_dim=args.conv_dim, n_channels=n_channels, image_size=128//args.kernel_size_lr).to(device)
-        elif args.nicolai_layers:
-            if args.one_hot_in_super:
+            model = Generator2x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, image_size=128//cfg.data.kernel_size_lr).to(device)
+        elif cfg.model.nicolai_layers:
+            if cfg.model.one_hot_in_super:
                 num_classes = 8
-                if args.one_hot_only_in_ups:
+                if cfg.model.one_hot_only_in_ups:
                     num_classes_resid = 1
                 else:
                     num_classes_resid = 8
             else:
                 num_classes = 1
                 num_classes_resid = 1
-            model = RectUpsampleWithResiduals(128//args.kernel_size_lr, 
-                            128 // args.kernel_size_hr,
-                            n_features=len(args.variables),
+            model = RectUpsampleWithResiduals(128//cfg.data.kernel_size_lr, 
+                            128 // cfg.data.kernel_size_hr,
+                            n_features=len(cfg.data.variables),
                             num_classes=num_classes,
                             num_classes_resid=num_classes_resid,
-                            num_neighbors_ups=args.num_neighbors_ups,
-                            num_neighbors_res=args.num_neighbors_res,
-                            map_dim=args.latent_dim,
+                            num_neighbors_ups=cfg.sparse_layers.num_neighbors_ups,
+                            num_neighbors_res=cfg.sparse_layers.num_neighbors_res,
+                            map_dim=cfg.sparse_layers.latent_dim,
                             noise_dim=5,
-                            mlp_hidden=args.hidden_dim,
-                            mlp_depth=args.mlp_depth,
-                            noise_dim_mlp=args.noise_dim_mlp,
-                            double_linear=args.double_linear,
-                            split_residuals=not args.not_split_residuals
+                            mlp_hidden=cfg.model.hidden_dim,
+                            mlp_depth=cfg.sparse_layers.mlp_depth,
+                            noise_dim_mlp=cfg.sparse_layers.noise_dim_mlp,
+                            double_linear=cfg.sparse_layers.double_linear,
+                            split_residuals=not cfg.sparse_layers.not_split_residuals
                             ).to(device)
-            if args.add_intermediate_loss:
-                assert args.latent_dim == len(args.variables)
+            if cfg.sparse_layers.add_intermediate_loss:
+                assert cfg.sparse_layers.latent_dim == len(cfg.data.variables)
             
         else:
             print("building dense MLP model")
-            model = StoUNet(interm_dim, out_dim, args.num_layer, args.hidden_dim, args.noise_dim,
-                    add_bn=args.bn, out_act=args.out_act, resblock=args.mlp, noise_std=args.noise_std,
-                    preproc_layer=args.preproc_layer, n_vars=n_vars,
-                    layer_shrinkage=args.layer_shrinkage, dropout=args.dropout).to(device)
+            model = StoUNet(interm_dim, out_dim, cfg.model.num_layer, cfg.model.hidden_dim, cfg.model.noise_dim,
+                    add_bn=cfg.model.bn, out_act=cfg.model.out_act, resblock=cfg.model.mlp, noise_std=cfg.model.noise_std,
+                    preproc_layer=cfg.model.preproc_layer, n_vars=n_vars,
+                    layer_shrinkage=cfg.model.layer_shrinkage, dropout=cfg.model.dropout).to(device)
 
         model = torch.nn.DataParallel(model)
-        optimizer_super = torch.optim.Adam(model.module.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        optimizer_super = torch.optim.Adam(model.module.parameters(), lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
         print(f'Built a model with #params: {count_parameters(model)}')            
     else:
         raise NotImplementedError("Method not implemented")
     
-    if args.resume_epoch > 0:
-        print("Resume training from epoch {}".format(args.resume_epoch))
-        ckpt_dir = save_dir + f"model_{args.resume_epoch}.pt"
+    if cfg.general.resume_epoch > 0:
+        print("Resume training from epoch {}".format(cfg.general.resume_epoch))
+        ckpt_dir = save_dir + f"model_{cfg.general.resume_epoch}.pt"
         model.module.load_state_dict(torch.load(ckpt_dir))
     
     
     # ----------- START TRAIN ------------------
     mp = torch.nn.MaxPool1d(128*128, stride=128*128)
-    mp_patch = torch.nn.MaxPool1d(args.patch_size**2, stride=args.patch_size**2)
+    mp_patch = torch.nn.MaxPool1d(cfg.loss.patch_size**2, stride=cfg.loss.patch_size**2)
 
     # MSE
     mse = torch.nn.MSELoss(reduction='none')
 
-    for epoch_idx in range(args.resume_epoch, args.num_epochs):
+    for epoch_idx in range(cfg.general.resume_epoch, cfg.training.num_epochs):
         start_time_epoch = time.time()
-        if epoch_idx == args.resume_epoch:
+        if epoch_idx == cfg.general.resume_epoch:
             print('Training has started!')
         
         # if epoch_idx == args.burn_in + 1:
@@ -516,83 +523,83 @@ if __name__ == '__main__':
             x, xc, y = x.to(device), xc.to(device), y.to(device)
             x = x.view(x.shape[0], -1)
 
-            if not args.conv and not args.conv_concat:
+            if not cfg.model.conv and not cfg.model.conv_concat:
                 y = y.view(y.shape[0], -1)
                 xc = xc.view(xc.shape[0], -1)
 
             # pdb.set_trace()
-            if args.add_x_in_super:
+            if cfg.model.add_x_in_super:
                 xc = torch.cat([xc, x[:, :720]], dim=1)
                 
-            if args.nicolai_layers:
-                if args.one_hot_in_super:
+            if cfg.model.nicolai_layers:
+                if cfg.model.one_hot_in_super:
                     cls_ids = torch.from_numpy(
                         get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(xc.device)
                     #x[:, -one_hot_dim:]
                 else:
                     cls_ids = None
-            if args.nicolai_layers and not args.double_linear and args.add_intermediate_loss:
+            if cfg.model.nicolai_layers and not cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                 gen1, y_interm = model(xc, cls_ids=cls_ids, return_latent=True)
                 gen2, y_interm2 = model(xc, cls_ids=cls_ids, return_latent=True)
-            elif args.nicolai_layers and args.double_linear and args.add_intermediate_loss:
+            elif cfg.model.nicolai_layers and cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                 gen1, _, y_interm = model(xc, cls_ids=cls_ids, return_latent=True)
                 gen2, _, y_interm2 = model(xc, cls_ids=cls_ids, return_latent=True)
-            elif args.nicolai_layers and args.add_mse_loss:
+            elif cfg.model.nicolai_layers and cfg.sparse_layers.add_mse_loss:
                 gen1, y_upsampled = model(xc, cls_ids=cls_ids, return_mean=True)
                 gen2, y_upsampled2 = model(xc, cls_ids=cls_ids, return_mean=True)
-            elif args.nicolai_layers:
+            elif cfg.model.nicolai_layers:
                 gen1 = model(xc, cls_ids=cls_ids)
                 gen2 = model(xc, cls_ids=cls_ids)
             else:
-                gen1 = model(add_one_hot(xc, one_hot_in_super=args.one_hot_in_super, conv=(args.conv or args.conv_concat), x=x, one_hot_dim=one_hot_dim))
-                gen2 = model(add_one_hot(xc, one_hot_in_super=args.one_hot_in_super, conv=(args.conv or args.conv_concat), x=x, one_hot_dim=one_hot_dim))
+                gen1 = model(add_one_hot(xc, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x, one_hot_dim=one_hot_dim))
+                gen2 = model(add_one_hot(xc, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x, one_hot_dim=one_hot_dim))
             
-            losses = energy_loss_two_sample(y, gen1, gen2, verbose=True, beta=args.beta, patch_size=None) # loss on entire multivariate field
+            losses = energy_loss_two_sample(y, gen1, gen2, verbose=True, beta=cfg.loss.beta, patch_size=None) # loss on entire multivariate field
             
-            if len(args.variables) > 1:
-                losses_per_var = energy_loss_multivariate_summed(y, gen1, gen2, verbose=True, beta=args.beta, n_vars=len(args.variables))
+            if len(cfg.data.variables) > 1:
+                losses_per_var = energy_loss_multivariate_summed(y, gen1, gen2, verbose=True, beta=cfg.loss.beta, n_vars=len(cfg.data.variables))
                 loss = losses[0] + losses_per_var[0]
                 # ONLY FOR DEBUGGING TAKE THIS LINE: loss = losses[0]
             else:
                 loss = losses[0]                
             
-            if args.nicolai_layers and args.add_intermediate_loss:
-                loss_interm = energy_loss_two_sample(y, y_interm, y_interm2, verbose=True, beta=args.beta, patch_size=None)
+            if cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss:
+                loss_interm = energy_loss_two_sample(y, y_interm, y_interm2, verbose=True, beta=cfg.loss.beta, patch_size=None)
                 loss += loss_interm[0] 
-            elif args.nicolai_layers and args.add_mse_loss:
+            elif cfg.model.nicolai_layers and cfg.sparse_layers.add_mse_loss:
                 loss_interm = (mse(y, y_upsampled.flatten(start_dim=1)) + mse(y, y_upsampled2.flatten(start_dim=1))) / 2
                 loss_interm = loss_interm.sum(dim=1).mean()
                 
-                loss += args.lambda_mse_loss * loss_interm
+                loss += cfg.sparse_layers.lambda_mse_loss * loss_interm
 
             if torch.isnan(loss):
                 print('Loss is NaN')
                 pdb.set_trace()
                 continue
             
-            if args.avg_constraint:
-                contraint = avg_constraint_per_var(xc, gen1, n_vars=len(args.variables))
+            if cfg.loss.avg_constraint:
+                contraint = avg_constraint_per_var(xc, gen1, n_vars=len(cfg.data.variables))
                 loss += contraint
             
-            if args.p_norm_loss_loc:
-                lossnp, lossnn = norm_loss_multivariate_summed(y, gen1, gen2, args.p_norm_loss_loc, beta_norm_loss=args.beta_norm_loss, type = "loc", agg_norm_loss="mean", n_vars = len(args.variables))
+            if cfg.loss.p_norm_loss_loc:
+                lossnp, lossnn = norm_loss_multivariate_summed(y, gen1, gen2, cfg.loss.p_norm_loss_loc, beta_norm_loss=cfg.loss.beta_norm_loss, type = "loc", agg_norm_loss="mean", n_vars = len(cfg.data.variables))
                 loss_tr_locs += lossnp.item()
 
-                if args.norm_loss_loc:
+                if cfg.loss.norm_loss_loc:
                     # old version without weighting
                     # loss += lossnp + lossnn 
                     
                     # now try weighting
-                    loss += args.lambda_norm_loss_loc * (lossnp + lossnn)            
+                    loss += cfg.loss.lambda_norm_loss_loc * (lossnp + lossnn)            
                         
-                    if args.patched_loss:
+                    if cfg.loss.patched_loss:
                         raise NotImplementedError("Patched loss not implemented yet")
                                 
-            if args.p_norm_loss_batch:
-                lossrn, lossrp = norm_loss_multivariate_summed(y, gen1, gen2, args.p_norm_loss_batch, beta_norm_loss=args.beta_norm_loss, type = "batch", agg_norm_loss=args.agg_norm_loss, n_vars = len(args.variables))
+            if cfg.loss.p_norm_loss_batch:
+                lossrn, lossrp = norm_loss_multivariate_summed(y, gen1, gen2, cfg.loss.p_norm_loss_batch, beta_norm_loss=cfg.loss.beta_norm_loss, type = "batch", agg_norm_loss=cfg.loss.agg_norm_loss, n_vars = len(cfg.data.variables))
                 loss_tr_batchel += lossrp.item()       
 
-                if args.norm_loss_batch:
+                if cfg.loss.norm_loss_batch:
                     loss += lossrp + lossrn 
                     
                     
@@ -600,10 +607,10 @@ if __name__ == '__main__':
             optimizer_super.step()
             n_batches += 1      
             loss_tr += loss.item()
-            if args.nicolai_layers and args.add_intermediate_loss and len(args.variables) > 1:
+            if cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss and len(cfg.data.variables) > 1:
                 s1_tr += (losses[1].item() + losses_per_var[1].item() + loss_interm[1].item())
                 s2_tr += (losses[2].item() + losses_per_var[2].item() + loss_interm[2].item())
-            elif len(args.variables) > 1:
+            elif len(cfg.data.variables) > 1:
                 s1_tr += (losses[1].item() + losses_per_var[1].item())
                 s2_tr += (losses[2].item() + losses_per_var[2].item())
             else:
@@ -616,31 +623,32 @@ if __name__ == '__main__':
             s2_tr_s += losses[2].item()
             # loss_tr_patch += losses_patch[0].item()
                 
-            if args.kernel_size_hr == 1 and (epoch_idx == 0 or ((epoch_idx + 1) % (args.print_every_nepoch * 10) == 0)):
+            if cfg.data.kernel_size_hr == 1 and (epoch_idx == 0 or ((epoch_idx + 1) % (cfg.general.print_every_nepoch
+ * 10) == 0)):
                 if n_batches_raw < 3:    
                     n_batches_raw +=1
                     with torch.no_grad():
-                        for i in range(len(args.variables)):
+                        for i in range(len(cfg.data.variables)):
                             if len(y.shape) == 3:
                                 y_var = y[:, i, :]
                                 gen_var = gen1[:, i, :]
                                 gen_var2 = gen2[:, i, :]
                             else:
-                                dim_per_var = y.size(1) // len(args.variables)
+                                dim_per_var = y.size(1) // len(cfg.data.variables)
                                 y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 gen_var = gen1[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
                             
-                            y_raw = unnormalise(y_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
-                                                norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]],
-                                                logit=args.logit_transform, normal=args.normal_transform)
-                            gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
-                                                norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]], sep_mean_std=args.sep_mean_std,
-                                                logit=args.logit_transform, normal=args.normal_transform)
-                            gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out, 
-                                                norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]], sep_mean_std=args.sep_mean_std,
-                                                logit=args.logit_transform, normal=args.normal_transform)
-                            loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_raw, gen1_raw, gen2_raw, verbose=True, beta=args.beta)
+                            y_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
+                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]],
+                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                            gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
+                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
+                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                            gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
+                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
+                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                            loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_raw, gen1_raw, gen2_raw, verbose=True, beta=cfg.loss.beta)
                             loss_tr_raw += loss_raw.item()
                             s1_tr_raw += s1_raw.item()
                             s2_tr_raw += s2_raw.item()
@@ -650,7 +658,7 @@ if __name__ == '__main__':
         log_file_time.write(log_time + '\n')
         log_file_time.flush()
            
-        if (epoch_idx == 0 or (epoch_idx + 1) % args.print_every_nepoch == 0):
+        if (epoch_idx == 0 or (epoch_idx + 1) % cfg.general.print_every_nepoch == 0):
             log_full = f'Train [Epoch {epoch_idx + 1}] \tloss: {loss_tr / n_batches:.4f}, s1: {s1_tr / n_batches:.4f}, s2: {s2_tr / n_batches:.4f}'
             log_super = f'Train-sup [Epoch {epoch_idx + 1}] \tloss: {loss_tr_s / n_batches:.4f}, s1: {s1_tr_s / n_batches:.4f}, s2: {s2_tr_s / n_batches:.4f}'
             #log_avc = f'Train-avc [Epoch {epoch_idx + 1}] \tloss: {loss_avc / n_batches:.4f}'
@@ -661,10 +669,10 @@ if __name__ == '__main__':
                 log_raw = f'Train-raw [Epoch {epoch_idx + 1}] \tloss: {loss_tr_raw / n_batches_raw:.4f}, s1: {s1_tr_raw / n_batches_raw:.4f}, s2: {s2_tr_raw / n_batches_raw:.4f}'
                 
             # ----------- GET TEST LOSS ------------------
-            if epoch_idx == 0 or ((epoch_idx + 1) % (args.print_every_nepoch * 10) == 0):             
+            if epoch_idx == 0 or ((epoch_idx + 1) % (cfg.general.print_every_nepoch * 10) == 0):             
                                 
                 # compute test loss on normalised and original scale
-                if not args.dropout:
+                if not cfg.model.dropout:
                     model.eval()
                 n_te_batches = 0
                 loss_te = 0; s1_te = 0; s2_te = 0
@@ -679,61 +687,61 @@ if __name__ == '__main__':
                         x_te, xc_te, y_te = x_te.to(device), xc_te.to(device), y_te.to(device)
                         x_te = x_te.view(x_te.shape[0], -1)
 
-                        if not args.conv and not args.conv_concat:  
+                        if not cfg.model.conv and not cfg.model.conv_concat:  
                             y_te = y_te.view(y_te.shape[0], -1)
                             xc_te = xc_te.view(xc_te.shape[0], -1)
                         
-                        if args.add_x_in_super:
+                        if cfg.model.add_x_in_super:
                             xc_te = torch.cat([xc_te, x_te[:, :720]], dim=1)
                             
-                        if args.nicolai_layers:
-                            if args.one_hot_in_super:
+                        if cfg.model.nicolai_layers:
+                            if cfg.model.one_hot_in_super:
                                 cls_ids = torch.from_numpy(
                                     get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
                                 ).to(xc_te.device)
                             else:
                                 cls_ids = None
                         
-                        if args.nicolai_layers and not args.double_linear and args.add_intermediate_loss:
+                        if cfg.model.nicolai_layers and not cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                             gen1, y_interm = model(xc_te, cls_ids=cls_ids, return_latent=True)
                             gen2, y_interm2 = model(xc_te, cls_ids=cls_ids, return_latent=True)
-                        elif args.nicolai_layers and args.double_linear and args.add_intermediate_loss:
+                        elif cfg.model.nicolai_layers and cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                             gen1, _, y_interm = model(xc_te, cls_ids=cls_ids, return_latent=True)
                             gen2, _, y_interm2 = model(xc_te, cls_ids=cls_ids, return_latent=True)
-                        elif args.nicolai_layers:
+                        elif cfg.model.nicolai_layers:
                             gen1 = model(xc_te, cls_ids=cls_ids)
                             gen2 = model(xc_te, cls_ids=cls_ids)
                         else:
-                            gen1 = model(add_one_hot(xc_te, one_hot_in_super=args.one_hot_in_super, conv=(args.conv or args.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
-                            gen2 = model(add_one_hot(xc_te, one_hot_in_super=args.one_hot_in_super, conv=(args.conv or args.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
+                            gen1 = model(add_one_hot(xc_te, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
+                            gen2 = model(add_one_hot(xc_te, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
                         
-                        if args.fft:
+                        if cfg.preprocessing.fft:
                             gen1 = fftpred2y(gen1)
                             gen2 = fftpred2y(gen2)
                         
-                        losses = energy_loss_two_sample(y_te, gen1, gen2, verbose=True, beta=args.beta, patch_size=None)
+                        losses = energy_loss_two_sample(y_te, gen1, gen2, verbose=True, beta=cfg.loss.beta, patch_size=None)
                         
-                        if len(args.variables) > 1:
-                            losses_per_var = energy_loss_multivariate_summed(y_te, gen1, gen2, verbose=True, beta=args.beta, n_vars=len(args.variables))
+                        if len(cfg.data.variables) > 1:
+                            losses_per_var = energy_loss_multivariate_summed(y_te, gen1, gen2, verbose=True, beta=cfg.loss.beta, n_vars=len(cfg.data.variables))
                             loss = losses[0] + losses_per_var[0]
                         else:
                             loss = losses[0]
                             
-                        if args.nicolai_layers and args.add_intermediate_loss:
-                            losses_interm = energy_loss_two_sample(y_te, y_interm, y_interm2, verbose=True, beta=args.beta, patch_size=None)
+                        if cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss:
+                            losses_interm = energy_loss_two_sample(y_te, y_interm, y_interm2, verbose=True, beta=cfg.loss.beta, patch_size=None)
                             loss += losses_interm[0]
                         
-                        if args.avg_constraint:
-                            constraint = avg_constraint_per_var(xc_te, gen1, n_vars=len(args.variables))
+                        if cfg.loss.avg_constraint:
+                            constraint = avg_constraint_per_var(xc_te, gen1, n_vars=len(cfg.data.variables))
                             loss += constraint
                                         
                         #loss_te_avc += constraint.item()
                         #loss_te_max += max_loss.item()
                         loss_te += loss.item()
-                        if args.nicolai_layers and args.add_intermediate_loss and len(args.variables) > 1:
+                        if cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss and len(cfg.data.variables) > 1:
                             s1_te += (losses[1].item() + losses_per_var[1].item() + losses_interm[1].item())
                             s2_te += (losses[2].item() + losses_per_var[2].item() + losses_interm[2].item())
-                        elif len(args.variables) > 1:
+                        elif len(cfg.data.variables) > 1:
                             s1_te += (losses[1].item() + losses_per_var[1].item())
                             s2_te += (losses[2].item() + losses_per_var[2].item())
                         else:
@@ -745,26 +753,26 @@ if __name__ == '__main__':
                         s2_te_s += losses[2].item()
                         n_te_batches += 1
                         
-                        if args.kernel_size_hr == 1:
-                            for i in range(len(args.variables)):
+                        if cfg.data.kernel_size_hr == 1:
+                            for i in range(len(cfg.data.variables)):
                                 if len(y_te.shape) == 3:
                                     y_var = y_te[:, i, :]
                                     gen_var = gen1[:, i, :]
                                     gen_var2 = gen2[:, i, :]
                                 else:
-                                    dim_per_var = y.size(1) // len(args.variables)
+                                    dim_per_var = y.size(1) // len(cfg.data.variables)
                                     y_var = y_te[:, i * dim_per_var:(i + 1) * dim_per_var]
                                     gen_var = gen1[:, i * dim_per_var:(i + 1) * dim_per_var]
                                     gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
-                                gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out,
-                                                    norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]], sep_mean_std=args.sep_mean_std,
-                                                    logit=args.logit_transform, normal=args.normal_transform)
-                                gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out,
-                                                    norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]], sep_mean_std=args.sep_mean_std,
-                                                    logit=args.logit_transform, normal=args.normal_transform)
-                                y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=args.variables[i], sqrt_transform=args.sqrt_transform_out,
-                                                    norm_method=args.norm_method_output, norm_stats=norm_stats[args.variables[i]],
-                                                    logit=args.logit_transform, normal=args.normal_transform)
+                                gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
+                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                                gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
+                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                                y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]],
+                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
                                 
                                 loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_te_raw, gen1_raw, gen2_raw, verbose=True)
                                 loss_te_raw += loss_raw.item()
@@ -803,42 +811,42 @@ if __name__ == '__main__':
             
         # -------------- small little eval  -----------------------------------
         
-        if (epoch_idx == 0 or (epoch_idx + 1) % args.sample_every_nepoch == 0):
+        if (epoch_idx == 0 or (epoch_idx + 1) % cfg.general.sample_every_nepoch == 0):
             
             # loss scale
             visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_loss-scale_super', 
-                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=args.sqrt_transform_out,
-                          logit=False, normal = False, fft=args.fft, mode_unnorm=mode_unnorm,
-                          one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                          logit=False, normal = False, fft=cfg.preprocessing.fft, mode_unnorm=mode_unnorm,
+                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
             visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_loss-scale_super', 
-                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=args.sqrt_transform_out,
-                          logit=False, normal = False, fft=args.fft, mode_unnorm=mode_unnorm,
-                          one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                          logit=False, normal = False, fft=cfg.preprocessing.fft, mode_unnorm=mode_unnorm,
+                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
             
-            if args.kernel_size_hr == 1: # if HR target is not coarsened also
-                if args.norm_method_output == "uniform" and args.logit_transform:
+            if cfg.data.kernel_size_hr == 1: # if HR target is not coarsened also
+                if cfg.preprocessing.norm_method_output == "uniform" and cfg.preprocessing.logit_transform:
                     # in this case, also visualise on uniformly transformed scale
-                    visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_unif-scale_super', 
-                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=args.sqrt_transform_out,
-                            logit = True, fft=args.fft,
-                            one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                        visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_unif-scale_super', 
+                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                            logit = True, fft=cfg.preprocessing.fft,
+                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
                     
-                    visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_unif-scale_super', 
-                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=args.sqrt_transform_out,
-                            logit = True, fft=args.fft,
-                            one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                        visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_unif-scale_super', 
+                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                            logit = True, fft=cfg.preprocessing.fft,
+                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
                 
                 # super model on raw data scale
                 visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_super', 
-                            norm_method=args.norm_method_output, norm_stats=norm_stats,
-                        square_data=False, sqrt_transform=args.sqrt_transform_out,
-                        logit = args.logit_transform, normal=args.normal_transform, fft=args.fft,
-                        one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                            norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats,
+                        square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                        logit = cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform, fft=cfg.preprocessing.fft,
+                        one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
                 visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_super', 
-                            norm_method=args.norm_method_output, norm_stats=norm_stats,
-                    square_data=False, sqrt_transform=args.sqrt_transform_out,
-                    logit = args.logit_transform, normal=args.normal_transform, fft=args.fft,
-                    one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=args.one_hot_in_super)
+                        norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats,
+                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
+                    logit = cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform, fft=cfg.preprocessing.fft,
+                    one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
             
             losses_to_img(save_dir, f"log.txt", "full", "_full")
             losses_to_img(save_dir, f"log_super.txt", "sup", "_super")
@@ -848,11 +856,11 @@ if __name__ == '__main__':
             # MULTIVARIATE 
             # only on loss scale          
             trues, samples = get_eval_samples(model.module, current_test_loader, mode_unnorm=mode_unnorm, norm_stats=None, input_mode = "xc", output_mode = "y", norm_method=None,
-                                              one_hot_dim=one_hot_dim, conv=(args.conv or args.conv_concat), one_hot_in_super=args.one_hot_in_super)
-            for i in range(len(args.variables)):
-                plot_rh(trues[:, i, :, :], samples[:, i, :, :, :], epoch_idx, save_dir, file_suffix=f"_full-model-var-{args.variables[i]}")
+                                              one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), one_hot_in_super=cfg.model.one_hot_in_super)
+            for i in range(len(cfg.data.variables)):
+                plot_rh(trues[:, i, :, :], samples[:, i, :, :, :], epoch_idx, save_dir, file_suffix=f"_full-model-var-{cfg.data.variables[i]}")
             
-        if epoch_idx == 0 or (epoch_idx + 1) % args.save_model_every == 0:# and i >= 30:
+        if epoch_idx == 0 or (epoch_idx + 1) % cfg.training.save_model_every == 0:# and i >= 30:
             torch.save(model.module.state_dict(), save_dir + f"model_{epoch_idx}.pt")
             
     # Clean up memory

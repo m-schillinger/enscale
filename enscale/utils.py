@@ -7,16 +7,24 @@ import pdb
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import scipy
+import yaml
+from dataclasses import asdict
 
 def make_folder(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
-def write_config_to_file(config, save_path):
-    with open(os.path.join(save_path, 'config.txt'), 'w') as file:
-        for arg in vars(config):
-            file.write(str(arg) + ': ' + str(getattr(config, arg)) + '\n')
-            
+def write_config_to_file(cfg, save_path, filename="config.yaml"):
+    os.makedirs(save_path, exist_ok=True)
+
+    path = os.path.join(save_path, filename)
+    with open(path, "w") as f:
+        yaml.safe_dump(
+            asdict(cfg),
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+        )
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
