@@ -14,3 +14,6 @@ dependencies:
   - xarray
   - cudnn
   - cartopy
+  - scipy
+  - scikit-learn
+  - netcdf4

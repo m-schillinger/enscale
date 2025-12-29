@@ -33,3 +33,5 @@ Scripts / notebooks to generate plots in the paper. Uses outputs from the evalua
 Two .yml files for conda environments:
 - environment_reproduce_preprint.yml: exported automatically, for exact reproducibility of results in the paper
 - environment_modern.yml: reduced package list with more recent python version, recommended for users
+
+Both environments yield identical results (up to numerical noise).

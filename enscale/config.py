@@ -1,12 +1,6 @@
 # config.py
 from dataclasses import dataclass, field
 from typing import List, Optional
-import numpy as np
-
-# config.py
-from dataclasses import dataclass, field
-from typing import List, Optional
-
 
 # -------------------------
 # General / bookkeeping
@@ -301,10 +295,10 @@ class TrainingConfig:
 
 @dataclass
 class Config:
-    general: GeneralConfig = GeneralConfig()
-    data: DataConfig = DataConfig()
-    model: ModelConfig = ModelConfig()
-    loss: LossConfig = LossConfig()
-    sparse_layers: SparseLocalLayerConfig = SparseLocalLayerConfig()
-    training: TrainingConfig = TrainingConfig()
-    preprocessing: DataPreprocessing = DataPreprocessing()
+    general: GeneralConfig = field(default_factory=GeneralConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    loss: LossConfig = field(default_factory=LossConfig)
+    sparse_layers: SparseLocalLayerConfig = field(default_factory=SparseLocalLayerConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    preprocessing: DataPreprocessing = field(default_factory=DataPreprocessing)
