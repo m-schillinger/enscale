@@ -5,7 +5,7 @@
 # -------------------------
 
 general:
-    save_name: "_normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple_TEST2"
+    save_name: "_normal-transform_dec1e-3_lam-mse0_split-residFalse_zerosconstant_onehot-simple_TEST-new-config"
     resume_epoch: 0
 
 # -------------------------
