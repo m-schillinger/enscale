@@ -10,7 +10,7 @@ from loss_func import energy_loss_two_sample, avg_constraint_per_var, energy_los
 import torch.nn.functional as F
 import torch.linalg as LA
 
-from data import get_data_2step_naive_avg
+from enscale.data_old import get_data_2step_naive_avg
 import argparse
 from load_config import load_config
 from utils import *

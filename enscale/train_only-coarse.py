@@ -6,7 +6,7 @@ from torchvision.utils import make_grid
 from modules import StoUNet, LinearModel, MultipleStoUNetWrapper, MeanResidualWrapper
 from loss_func import energy_loss_two_sample, norm_loss_multivariate_summed
 
-from data import get_data_2step_naive_avg
+from enscale.data_old import get_data_2step_naive_avg
 import argparse
 from load_config import load_config
 from utils import *
