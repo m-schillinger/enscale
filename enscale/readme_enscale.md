@@ -31,7 +31,6 @@ Normalisation options (all of them are done separately for each climate variable
 
 **More will follow.**
 
-
 ## On EnScale training
 
 

@@ -1,9 +1,21 @@
 from dataclasses import dataclass
-
 import scipy
-from enscale.utils import correct_units
-import torch
+from utils import correct_units
 from typing import Optional
+import os
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch.utils.data import Subset
+from sklearn.model_selection import train_test_split
+from torch.utils.data.dataset import ConcatDataset
+import os
+import numpy as np
+import re
+import xarray as xr
+from utils import *
+import scipy
+import math
 
 # what is missing in this file:
 # option to specify path for Cordex data
@@ -58,6 +70,7 @@ class CordexPathSpec:
             rcm=run.rcm,
             variant=run.variant,
         )
+        
 
 class CordexReader(DataReader):
     def __init__(self, path_spec: CordexPathSpec):
@@ -88,42 +101,120 @@ class SimpleNetCDFReader(DataReader):
     def load_hr(self, var, run):
         return xr.open_dataset(self.files["hr"][var])[var]
 
+def apply_variable_transform(x, var, sqrt_cfg):
+    if sqrt_cfg.get(var, False):
+        return torch.sqrt(x)
+    return x
+
+PRIMITIVE_STATS = {
+    "tas": (10.0, 10.0),
+    "pr": (0.0, 1.0),
+    "rsds": (150.0, 100.0),
+    "sfcWind": (2.2, 0.6),
+    "psl": (1e5, 1e3),
+}
+
+def primitive_normalise(x, var):
+    mean, std = PRIMITIVE_STATS[var]
+    return (x - mean) / std
+
+def ecdf_normalise(x, norm_stats, len_full_data=int(3e4)): # TO DO: need to make more flexible
+    data_norm = torch.zeros_like(x)
+    probs = torch.linspace(1, len_full_data, len_full_data) / (len_full_data + 1) 
+    for i in range(x.shape[1]):
+        for j in range(x.shape[2]):
+            quantiles = norm_stats[:, i, j]
+            data_norm[:, i, j] = torch.tensor(np.interp(x[:, i, j].detach().cpu().numpy(), quantiles.detach().cpu().numpy(), probs))
+    return data_norm
+
+def load_norm_stats(cfg, mode, var, suffix, device=None):
+    pattern = cfg.stats.pattern[cfg.method]
+    path = os.path.join(
+        cfg.stats.root,
+        pattern.format(
+            mode=mode,
+            var=var,
+            suffix=suffix,
+        )
+    )
+    stats = torch.load(path, map_location=device)
+    return stats
+
+def normalise(
+    data,
+    *,
+    var,
+    mode,
+    cfg,
+    norm_stats=None,
+):
+    # 1. Variable transforms
+    data = apply_variable_transform(data, var, cfg.sqrt_transform)
+
+    suffix = "_sqrt" if cfg.sqrt_transform.get(var, False) else ""
+
+    # 2. Normalisation
+    if not cfg.normalisation.apply or cfg.normalisation.method == "none":
+        data_norm = data
+
+    elif cfg.normalisation.method == "primitive":
+        data_norm = primitive_normalise(data, var)
+
+    elif cfg.normalisation.method in {"normalise_pw", "normalise_scalar"}:
+        if norm_stats is None:
+            norm_stats = load_norm_stats(
+                cfg.normalisation,
+                mode,
+                var,
+                suffix,
+                device=data.device if torch.is_tensor(data) else None,
+            )
+        data_norm = (data - norm_stats["mean"]) / norm_stats["std"]
+
+    elif cfg.normalisation.method == "uniform":
+        if norm_stats is None:
+            norm_stats = load_norm_stats(
+                cfg.normalisation,
+                mode,
+                var,
+                suffix,
+            )
+        data_norm = ecdf_normalise(data, norm_stats)
+
+    else:
+        raise ValueError(f"Unknown norm method: {cfg.normalisation.method}")
+
+    # 3. Flatten (always last)
+    data_norm = data_norm.reshape(data_norm.shape[0], -1)
+
+    # 4. Post transforms
+    if cfg.post_transform.logit:
+        data_norm = torch.logit(data_norm)
+    if cfg.post_transform.gaussian:
+        data_np = data_norm.detach().cpu().numpy()
+        data_norm = torch.from_numpy(scipy.stats.norm.ppf(data_np)).to(data_norm.dtype).to(data_norm.device)
+
+    return data_norm
 
 class Preprocessor:
     def __init__(self, cfg):
         self.cfg = cfg
-        
-    def process_hr(self, x, var):
-        if self.cfg.correct_units:
-            x = correct_units(x, var)
-        if self.cfg.apply_normalisation:
-            x = normalise(
-                x,
-                mode="hr",
-                data_type=var,
-                sqrt_transform=self.cfg.sqrt_transform_out,
-                norm_method=self.cfg.norm_output,
-            )
-        if self.cf.logit:
-            x = torch.logit(x)
-            hr_np = x.detach().cpu().numpy()
-            hr_np_gauss = scipy.stats.norm.ppf(hr_np) # more stable than torch.Normal.icdf
-            x = torch.from_numpy(hr_np_gauss).to(x.dtype).to(x.device)
 
-        return x
-    
     def process_lr(self, x, var):
-        if self.cfg.correct_units:
-            x = correct_units(x, var)
-        if self.cfg.apply_normalisation:
-            x = normalise(
-                x,
-                mode="lr",
-                data_type=var,
-                sqrt_transform=self.cfg.sqrt_transform_in,
-                norm_method=self.cfg.norm_input,
-            )
-        return x
+        return normalise(
+            x,
+            var=var,
+            mode="lr",
+            cfg=self.cfg,
+        )
+
+    def process_hr(self, x, var):
+        return normalise(
+            x,
+            var=var,
+            mode="hr",
+            cfg=self.cfg,
+        )
 
     def coarsen(self, x, k, stride, padding):
         return torch.nn.functional.avg_pool2d(
@@ -167,10 +258,11 @@ class DownscalingDataset(Dataset):
         for v in variables_hr:
             y = reader.load_hr(v, run)
             y = torch.from_numpy(y.values).float()
+            ny, nx = y.shape[-2], y.shape[-1]
             y = preproc.process_hr(y, v)
-            hr_vars.append(y)
+            hr_vars.append(y.unsqueeze(1))
             hr_coarse_vars.append(
-                preproc.coarsen(y, kernel_size, kernel_size, 0)
+                preproc.coarsen(y.view(y.shape[0], ny, nx), kernel_size, kernel_size, 0).view(y.shape[0], 1, -1)
             )
 
         self.x = torch.cat(lr_vars, dim=1)
@@ -188,8 +280,8 @@ class DownscalingDataset(Dataset):
             assert time_feats_1d is not None
             assert time_feats_1d.shape[0] == self.x.shape[0]
 
-            time_feats = self._expand_time_features(time_feats_1d, self.x)
-
+            #time_feats = self._expand_time_features(time_feats_1d, self.x)
+            time_feats = time_feats_1d
             self.x = torch.cat([self.x, time_feats], dim=1)
 
         # Optional metadata
@@ -208,24 +300,23 @@ class DownscalingDataset(Dataset):
         Builds time features exactly as in the original code.
         Returns tensor of shape (T, C_time)
         """
-
-        months_np = time_index.month.values.astype(int)
-        days_np   = time_index.day.values.astype(int)
-        years_np  = time_index.year.values.astype(float)
-
-        is_leap = is_leap_year(years_np)
-        leap_year_mask = is_leap & (months_np == 2) & (days_np == 29)
+        idx = time_index.to_index()
+        months = idx.strftime("%m").astype(int).to_numpy()
+        days   = idx.strftime("%d").astype(int).to_numpy()
+        years  = idx.strftime("%Y").astype(int).to_numpy()
+        is_leap = is_leap_year(years)
+        leap_year_mask = is_leap & (months == 2) & (days == 29)
         consider_leap = bool(np.any(leap_year_mask))
 
         doy = day_of_year_vectorized(
-            months_np,
-            days_np,
+            months,
+            days,
             is_leap,
             consider_leap=consider_leap,
         )
 
         doy = torch.from_numpy(doy).float().unsqueeze(1)
-        year = torch.from_numpy(years_np).float().unsqueeze(1)
+        year = torch.from_numpy(years).float().unsqueeze(1)
 
         feats = []
 
@@ -261,6 +352,34 @@ def build_reader(cfg):
 
     elif data.type == "single_pair":
         return SimpleNetCDFReader(data.inputs)
+
+def build_one_hot(cfg, gcm_list, rcm_list):
+    enc_cfg = cfg.data.get("ensemble_encoding", {})
+    if not enc_cfg.get("enabled", False):
+        return None
+
+    scheme = enc_cfg.get("scheme", "gcm+rcm")
+
+    if scheme != "gcm+rcm":
+        raise NotImplementedError(f"Unknown encoding scheme: {scheme}")
+
+    gcms = sorted(set(gcm_list))
+    rcms = sorted(set(rcm_list))
+
+    gcm_index = {g: i for i, g in enumerate(gcms)}
+    rcm_index = {r: i for i, r in enumerate(rcms)}
+
+    n_runs = len(gcm_list)
+    n_feat = len(gcms) + len(rcms)
+
+    one_hot = torch.zeros(n_runs, n_feat)
+
+    for i, (gcm, rcm) in enumerate(zip(gcm_list, rcm_list)):
+        one_hot[i, gcm_index[gcm]] = 1.0
+        one_hot[i, len(gcms) + rcm_index[rcm]] = 1.0
+
+    return one_hot
+
 
 def build_run_specs(cfg):
     data_cfg = cfg.data
