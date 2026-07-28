@@ -1,11 +1,17 @@
 # More detailled information on EnScale implementation
 
+## Dataloading options
+
+**add note on cordex vs. single pair**
+
 ## Data folders
 
 Currently, we have separate folders for train and test data (`train`, `test/interpolation`, `test/extrapolation`).
 From the `train` data, a random subset (with a fixed random seed, s.t. the split is the same in each call) is taken as the validation set.
 "Test loss" in the train files refers to the loss on the validation set.
 The actual test data is only used in the inference to generate predictions (and in the separate evaluation as in the paper).
+
+**add note on ``what if only train''**
 
 ## Data normalisation
 

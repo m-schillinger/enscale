@@ -53,40 +53,53 @@ class CordexPathSpec:
     lr_pattern: str
     hr_pattern: str
 
-    def lr_path(self, var, run: RunSpec):
+    def lr_path(self, var, run: RunSpec, folder: str = "train", file_suffix: str = ""):
         return self.lr_pattern.format(
             root=self.root,
+            folder=folder,
             var=var,
             gcm=run.gcm,
             rcm=run.rcm,
             variant=run.variant,
+            file_suffix=file_suffix,
         )
 
-    def hr_path(self, var, run: RunSpec):
+    def hr_path(self, var, run: RunSpec, folder: str = "train", file_suffix: str = ""):
         return self.hr_pattern.format(
             root=self.root,
+            folder=folder,
             var=var,
             gcm=run.gcm,
             rcm=run.rcm,
             variant=run.variant,
+            file_suffix=file_suffix,
         )
         
 
 class CordexReader(DataReader):
-    def __init__(self, path_spec: CordexPathSpec):
+    def __init__(self, path_spec: CordexPathSpec, modes: dict = None, default_mode: str = "train"):
         self.path_spec = path_spec
+        self.modes = modes or {}
+        self.default_mode = default_mode
 
-    def load_lr(self, var, run: RunSpec):
-        path = self.path_spec.lr_path(var, run)
+    def _mode_info(self, mode: str):
+        if mode is None:
+            mode = self.default_mode
+        return self.modes.get(mode, {"folder": "train", "file_suffix": ""})
+
+    def load_lr(self, var, run: RunSpec, mode: str = None):
+        mi = self._mode_info(mode)
+        path = self.path_spec.lr_path(var, run, folder=mi.get("folder", "train"), file_suffix=mi.get("file_suffix", ""))
         return xr.open_dataset(path)[var]
 
-    def load_hr(self, var, run: RunSpec):
-        path = self.path_spec.hr_path(var, run)
+    def load_hr(self, var, run: RunSpec, mode: str = None):
+        mi = self._mode_info(mode)
+        path = self.path_spec.hr_path(var, run, folder=mi.get("folder", "train"), file_suffix=mi.get("file_suffix", ""))
         return xr.open_dataset(path)[var]
     
-    def load_time(self, run: RunSpec):
-        # load time from one of the variables
-        path = self.path_spec.hr_path(var="tas", run=run)
+    def load_time(self, run: RunSpec, mode: str = None):
+        mi = self._mode_info(mode)
+        path = self.path_spec.hr_path(var="tas", run=run, folder=mi.get("folder", "train"), file_suffix=mi.get("file_suffix", ""))
         ds = xr.open_dataset(path)
         return ds["time"]
 
@@ -143,18 +156,23 @@ class DownscalingDataset(Dataset):
         run: RunSpec,
         variables_lr,
         variables_hr,
-        kernel_size,
+        kernel_size_lr,
+        kernel_size_hr,
         include_time=True,
         include_year=False,
+        mode: str = "train",
+        return_timepair: bool = False,
     ):
         self.reader = reader
         self.preproc = preproc
         self.run = run
+        self.mode = mode
 
         # Load and preprocess all data ONCE
         lr_vars = []
         for v in variables_lr:
-            x = reader.load_lr(v, run)
+            # pass the requested mode to the reader (for cordex reader this selects folder/file_suffix)
+            x = reader.load_lr(v, run, mode=self.mode)
             x = torch.from_numpy(x.values).float()
             x = preproc.process_lr(x, v)
             lr_vars.append(x)
@@ -162,14 +180,16 @@ class DownscalingDataset(Dataset):
         hr_vars = []
         hr_coarse_vars = []
         for v in variables_hr:
-            y = reader.load_hr(v, run)
+            y = reader.load_hr(v, run, mode=self.mode)
             y = torch.from_numpy(y.values).float()
             ny, nx = y.shape[-2], y.shape[-1]
             y = preproc.process_hr(y, v)
-            hr_vars.append(y.unsqueeze(1))
             hr_coarse_vars.append(
-                preproc.coarsen(y.view(y.shape[0], ny, nx), kernel_size, kernel_size, 0).view(y.shape[0], 1, -1)
+                preproc.coarsen(y.view(y.shape[0], ny, nx), kernel_size_lr, kernel_size_lr, 0).view(y.shape[0], 1, -1)
             )
+            if kernel_size_hr > 1:
+                y = preproc.coarsen(y.view(y.shape[0], ny, nx), kernel_size_hr, kernel_size_hr, 0).view(y.shape[0], -1)
+            hr_vars.append(y.unsqueeze(1))
 
         self.x = torch.cat(lr_vars, dim=1)
         self.z = torch.cat(hr_coarse_vars, dim=1)
@@ -177,10 +197,11 @@ class DownscalingDataset(Dataset):
 
         self.include_time = include_time
         self.include_year = include_year
+        self.return_timepair = return_timepair
 
         # Optional time features
         if self.include_time or self.include_year:
-            time_index = reader.load_time(run)
+            time_index = reader.load_time(run, mode=self.mode)
 
             time_feats_1d = self._build_time_features(time_index)
             assert time_feats_1d is not None
@@ -196,9 +217,21 @@ class DownscalingDataset(Dataset):
             self.x = torch.cat([self.x, oh], dim=-1)
       
     def __len__(self):
+        if self.return_timepair:
+            return self.x.shape[0] - 1
         return self.x.shape[0]
 
     def __getitem__(self, idx):
+        if self.return_timepair:
+            # Temporal contract: previous timestep first, then current timestep.
+            return (
+                self.x[idx],
+                self.z[idx],
+                self.y[idx],
+                self.x[idx + 1],
+                self.z[idx + 1],
+                self.y[idx + 1],
+            )
         return self.x[idx], self.z[idx], self.y[idx]
 
     def _build_time_features(self, time_index):
@@ -243,25 +276,29 @@ class DownscalingDataset(Dataset):
 
         return torch.cat(feats, dim=1)  # (T, C_time)
 
-
     
 def build_reader(cfg):
     data = cfg.data
-
     if data.type == "cordex_ensemble":
         spec = CordexPathSpec(
             root=data.cordex.root,
             lr_pattern=data.cordex.lr_pattern,
             hr_pattern=data.cordex.hr_pattern,
         )
-        return CordexReader(spec)
+        modes = getattr(data.cordex, 'modes', None)
+        return CordexReader(spec, modes=modes, default_mode="train")
 
     elif data.type == "single_pair":
         return SimpleNetCDFReader(data.inputs)
 
 def build_one_hot(cfg, gcm_list, rcm_list):
-    enc_cfg = cfg.data.get("ensemble_encoding", {})
-    if not enc_cfg.get("enabled", False):
+    # support cfg.data as dataclass or dict
+    if isinstance(cfg.data, dict):
+        enc_cfg = cfg.data.get("ensemble_encoding", {})
+    else:
+        enc_cfg = getattr(cfg.data, 'ensemble_encoding', {}) or {}
+
+    if not isinstance(enc_cfg, dict) or not enc_cfg.get("enabled", False):
         return None
 
     scheme = enc_cfg.get("scheme", "gcm+rcm")
@@ -297,9 +334,17 @@ def build_run_specs(cfg):
     # ---------- Multi RCM/GCM ----------
     elif data_cfg.type == "cordex_ensemble":
         gcm_list, rcm_list, gcm_dict, rcm_dict = \
-            get_rcm_gcm_combinations(data_cfg.root)
+            get_rcm_gcm_combinations(data_cfg.cordex.root)
 
-        if data_cfg.runs.selection == "first_n":
+        # Prefer legacy flat fields when provided; otherwise use nested runs config.
+        legacy_run_indices = getattr(data_cfg, "run_indices", None)
+        legacy_n_models = getattr(data_cfg, "n_models", None)
+
+        if legacy_run_indices is not None:
+            indices = [int(i) for i in legacy_run_indices]
+        elif legacy_n_models is not None:
+            indices = list(range(int(legacy_n_models)))
+        elif data_cfg.runs.selection == "first_n":
             indices = list(range(data_cfg.runs.n_models))
         elif data_cfg.runs.selection == "explicit":
             indices = data_cfg.runs.indices
@@ -320,7 +365,12 @@ def build_run_specs(cfg):
         return runs
 
 
-def get_data(cfg):
+def get_data(cfg,
+             test_size: float = 0.0,
+             shuffle: bool = True,
+             mode: str = "train",
+             batch_size = None,
+             temporal: Optional[bool] = None):
     """
     Builds dataloaders from config.
     Works for:
@@ -337,6 +387,9 @@ def get_data(cfg):
     # 3. Run specifications
     runs = build_run_specs(cfg)
 
+    if temporal is None:
+        temporal = bool(getattr(cfg.data, "return_timepair", False))
+
     # 4. Datasets (one per run)
     datasets = [
         DownscalingDataset(
@@ -345,20 +398,43 @@ def get_data(cfg):
             run=run,
             variables_lr=cfg.data.variables_lr,
             variables_hr=cfg.data.variables,
-            kernel_size=cfg.data.kernel_size_lr,
+            kernel_size_lr=cfg.data.kernel_size_lr,
+            kernel_size_hr=cfg.data.kernel_size_hr,
+            mode=mode,
+            return_timepair=temporal,
         )
         for run in runs
     ]
 
     # 5. Concatenate
     full_dataset = ConcatDataset(datasets)
+    
+    if batch_size is None:
+        batch_size = cfg.training.batch_size
+    if test_size > 0:
+        train_indices, test_indices = train_test_split(list(range(len(full_dataset))), 
+                                                       test_size = test_size, 
+                                                       random_state = cfg.data.random_state)
+        dataset_train = Subset(full_dataset, train_indices)
+        dataset_test = Subset(full_dataset, test_indices)
+        #dataloader_train = DataLoader(dataset_train, batch_size, shuffle=shuffle)
+        #dataloader_test = DataLoader(dataset_test, batch_size, shuffle=shuffle)
+        dataloader_train = DataLoader(
+            dataset_train,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=cfg.training.num_workers,
+            )
+        dataloader_test = DataLoader(
+            dataset_test,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=cfg.training.num_workers,
+            )
+    else:
+        dataloader_train = DataLoader(full_dataset, 
+                                      batch_size=batch_size, 
+                                      shuffle=shuffle)
+        dataloader_test = None
 
-    # 6. DataLoader
-    loader = DataLoader(
-        full_dataset,
-        batch_size=cfg.training.batch_size,
-        shuffle=True,
-        num_workers=cfg.training.num_workers,
-    )
-
-    return loader
+    return dataloader_train, dataloader_test

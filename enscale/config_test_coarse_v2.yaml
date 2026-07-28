@@ -17,11 +17,11 @@ general:
 # -------------------------
 
 data:
-    variables: ["tas", "pr", "sfcWind", "rsds"] #tas pr sfcWind rsds
+    variables: ["tas", "pr"]
     variables_lr: ["pr"]
     type: cordex_ensemble # cordex_ensemble or single_pair
     kernel_size_lr: 16
-    kernel_size_hr: 8
+    kernel_size_hr: 1
     precip_zeros: "constant"
     data_dir: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
     random_state: 42
@@ -60,16 +60,16 @@ data:
 
     preprocessing:
         norm_method_input: "normalise_scalar"
-        norm_method_output: "uniform" # or: "normalise_scalar", "normalise_pw", "none"
+        norm_method_output: "normalise_pw" # or: "normalise_scalar", "normalise_pw", "none"
         fft: false
 
         sqrt_transform_in:
-            pr: false
-            sfcWind: false
+            pr: true
+            sfcWind: true
 
         sqrt_transform_out:
-            pr: false
-            sfcWind: false
+            pr: true
+            sfcWind: true
 
         stats:
             root: /r/scratch/groups/nm/downscaling/cordex-ALPS-allyear/norm_stats
@@ -81,7 +81,7 @@ data:
 
         post_transform:
             logit: false
-            gaussian: true
+            gaussian: false
 
 # -------------------------
 # Model architecture

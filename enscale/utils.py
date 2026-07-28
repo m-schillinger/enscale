@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import re
 import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
 import pdb
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
@@ -25,6 +26,55 @@ def write_config_to_file(cfg, save_path, filename="config.yaml"):
             sort_keys=False,
             default_flow_style=False,
         )
+        
+
+def build_save_dir(cfg, variables_str, subfolder):
+    """Build save_dir path based on config pattern and substituted values."""
+    # Select root directory based on server
+    if cfg.general.server == "ada":
+        root = cfg.general.save_dir_root_local
+    elif cfg.general.server == "euler":
+        root = cfg.general.save_dir_root_server
+    else:
+        raise ValueError(f"Unknown server: {cfg.general.server}")
+    
+    # Get the pattern from config (or use default if not specified)
+    if hasattr(cfg.general, 'save_dir_pattern') and cfg.general.save_dir_pattern:
+        pattern = cfg.general.save_dir_pattern
+    else:
+        # Fallback pattern for backward compatibility
+        pattern = "{method}/super/{subfolder}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_layer-shr-{layer_shrinkage}_avc-c-{avg_constraint}_norm-out-{norm_method_output}{save_name}/"
+    
+    # Build substitution dictionary with available config parameters
+    substitutions = {
+        'method': cfg.model.method,
+        'subfolder': subfolder,
+        'variables': variables_str,
+        'hidden_dim': cfg.model.hidden_dim,
+        'num_layer': cfg.model.num_layer,
+        'layer_shrinkage': cfg.model.layer_shrinkage,
+        'avg_constraint': cfg.loss.avg_constraint,
+        'norm_method_output': cfg.data.preprocessing.norm_method_output,
+        'norm_method_input': cfg.data.preprocessing.norm_method_input,
+        'save_name': cfg.general.save_name,
+        'conv': cfg.model.conv,
+        'conv_concat': cfg.model.conv_concat,
+        'conv_dim': cfg.model.conv_dim,
+        'nicolai_layers': cfg.model.nicolai_layers,
+        'num_neighbors_res': cfg.sparse_layers.num_neighbors_res if hasattr(cfg.sparse_layers, 'num_neighbors_res') else '',
+        'num_neighbors_ups': cfg.sparse_layers.num_neighbors_ups if hasattr(cfg.sparse_layers, 'num_neighbors_ups') else '',
+        'latent_dim': cfg.sparse_layers.latent_dim if hasattr(cfg.sparse_layers, 'latent_dim') else '',
+    }
+    
+    # Format the pattern with substitutions
+    try:
+        path = pattern.format(**substitutions)
+    except KeyError as e:
+        raise ValueError(f"Unknown placeholder in save_dir_pattern: {e}")
+    
+    return f"{root}/{path}"
+
+        
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -158,6 +208,383 @@ def add_one_hot(xc, one_hot_in_super=False, conv=False, x=None, one_hot_dim=0):
         xc = torch.cat([xc, x[:, -one_hot_dim:]], dim=1)
     return xc
 
+
+def get_spatial_dims_from_mode(mode):
+    if mode == "hr":
+        return 128, 128
+    if mode == "lr":
+        return 20, 36
+    if mode == "hr_avg":
+        return 8, 8
+    if mode == "hr_avg_2":
+        return 64, 64
+    if mode == "hr_avg_4":
+        return 32, 32
+    if mode == "hr_avg_8":
+        return 16, 16
+    if mode == "hr_avg_32":
+        return 4, 4
+    if mode == "hr_avg_64":
+        return 2, 2
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+def _split_variable(tensor, var_idx, n_vars):
+    if len(tensor.shape) == 3:
+        return tensor[:, var_idx, :]
+    dim_per_var = tensor.size(1) // n_vars
+    return tensor[:, var_idx * dim_per_var:(var_idx + 1) * dim_per_var]
+
+
+def visual_sample(
+    model,
+    x,
+    y,
+    save_dir,
+    cfg,
+    norm_stats=None,
+    mode_unnorm="hr",
+    one_hot_dim=None,
+    one_hot_in_super=False,
+    conv=False,
+    x_one_hot=None,
+    gcm_dict=None,
+    rcm_dict=None,
+    gcm_list=None,
+    rcm_list=None,
+    y_prev=None,
+    xc_prev=None,
+    show_input_upsampled=False,
+):
+    if not cfg.model.dropout:
+        model.eval()
+
+    with torch.no_grad():
+        x_in = x
+        y_in = y
+        x_for_plot = x
+
+        if not conv:
+            x_in = x_in.view(x_in.shape[0], -1)
+            y_in = y_in.view(y_in.shape[0], -1)
+
+        if cfg.model.add_x_in_super:
+            if x_one_hot is None:
+                raise ValueError("x_one_hot is required when add_x_in_super is enabled.")
+            x_in = torch.cat([x_in, x_one_hot[:, :720]], dim=1)
+
+        if not cfg.model.nicolai_layers:
+            x_in = add_one_hot(
+                x_in,
+                one_hot_in_super=one_hot_in_super,
+                conv=conv,
+                x=x_one_hot,
+                one_hot_dim=one_hot_dim,
+            )
+
+        call_kwargs = {}
+        if y_prev is not None:
+            call_kwargs["y_prev"] = y_prev
+
+        cls_ids = None
+        if cfg.model.nicolai_layers and one_hot_in_super:
+            if one_hot_dim is None or x_one_hot is None:
+                raise ValueError("one_hot_dim and x_one_hot are required when one_hot_in_super is enabled.")
+            if cfg.data.ignore_one_hot_gcm:
+                cls_ids = torch.argmax(x_one_hot[:, -one_hot_dim:], dim=1)
+            else:
+                if gcm_dict is None or rcm_dict is None:
+                    raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
+                cls_ids_np = get_run_index_from_onehot(
+                    x_one_hot[:, -one_hot_dim:],
+                    gcm_dict=gcm_dict,
+                    rcm_dict=rcm_dict,
+                    rcm_list=rcm_list,
+                    gcm_list=gcm_list,
+                )
+                cls_ids = torch.from_numpy(cls_ids_np).to(x_in.device)
+
+        if cls_ids is not None:
+            call_kwargs["cls_ids"] = cls_ids
+
+        if xc_prev is not None:
+            model_in = torch.cat([x_in, xc_prev.view(xc_prev.shape[0], -1)], dim=1)
+            plot_intermediate = False
+            gen = model(model_in)
+            gen2 = model(model_in)
+        else:
+            if cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss:
+                plot_intermediate = True
+                if cfg.sparse_layers.double_linear:
+                    gen, _, y_interm = model(x_in, return_latent=True, **call_kwargs)
+                    gen2, _, y_interm2 = model(x_in, return_latent=True, **call_kwargs)
+                else:
+                    gen, y_interm = model(x_in, return_latent=True, **call_kwargs)
+                    gen2, y_interm2 = model(x_in, return_latent=True, **call_kwargs)
+            else:
+                plot_intermediate = False
+                gen = model(x_in, **call_kwargs)
+                gen2 = model(x_in, **call_kwargs)
+
+    s1, s2 = get_spatial_dims_from_mode(mode_unnorm)
+    for i, var in enumerate(cfg.data.variables):
+        gen_var = _split_variable(gen, i, len(cfg.data.variables))
+        gen_var2 = _split_variable(gen2, i, len(cfg.data.variables))
+        y_var = _split_variable(y_in, i, len(cfg.data.variables))
+
+        norm_stats_var = norm_stats[var] if norm_stats is not None else None
+
+        gen_var = unnormalise(
+            gen_var,
+            var=var,
+            mode=mode_unnorm,
+            s1=s1,
+            s2=s2,
+            cfg=cfg.data.preprocessing,
+            norm_stats=norm_stats_var,
+        ).unsqueeze(1)
+        gen_var2 = unnormalise(
+            gen_var2,
+            var=var,
+            mode=mode_unnorm,
+            s1=s1,
+            s2=s2,
+            cfg=cfg.data.preprocessing,
+            norm_stats=norm_stats_var,
+        ).unsqueeze(1)
+        y_var = unnormalise(
+            y_var,
+            var=var,
+            mode=mode_unnorm,
+            s1=s1,
+            s2=s2,
+            cfg=cfg.data.preprocessing,
+            norm_stats=norm_stats_var,
+        ).unsqueeze(1)
+
+        if plot_intermediate:
+            dim_per_var = gen.size(1) // len(cfg.data.variables)
+            i0 = i * dim_per_var
+            i1 = (i + 1) * dim_per_var
+            ks = cfg.data.kernel_size_hr
+            side = 128 // ks
+            intermediate_var = y_interm[:, i0:i1].view(y_interm.shape[0], 1, side, side)
+            intermediate_var2 = y_interm2[:, i0:i1].view(y_interm2.shape[0], 1, side, side)
+            sample = torch.cat([
+                y_var.cpu(),
+                intermediate_var.cpu(),
+                intermediate_var2.cpu(),
+                gen_var.cpu(),
+                gen_var2.cpu(),
+            ])
+        elif show_input_upsampled:
+            s_low = int(128 / cfg.data.kernel_size_lr)
+            x_ups = torch.nn.functional.interpolate(
+                x_for_plot.view(x_for_plot.shape[0], s_low, s_low).unsqueeze(1),
+                size=(128, 128),
+                mode="nearest",
+            )
+            sample = torch.cat([x_ups.cpu(), y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
+        else:
+            sample = torch.cat([y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
+
+        sample = torch.clamp(
+            sample,
+            torch.quantile(y_var, 0.0005).item(),
+            torch.quantile(y_var, 0.9995).item(),
+        )
+        plt.matshow(make_grid(sample, nrow=y_in.shape[0]).permute(1, 2, 0)[:, :, 0], cmap="rainbow")
+        plt.axis("off")
+        plt.savefig(save_dir + f"_var-{var}.png", bbox_inches="tight", pad_inches=0, dpi=300)
+        plt.close()
+
+    model.train()
+
+
+def get_eval_samples(
+    current_model,
+    current_test_loader,
+    cfg,
+    device,
+    mode_unnorm="hr",
+    norm_stats=None,
+    input_mode="x",
+    output_mode="y",
+    one_hot_in_super=False,
+    conv=False,
+    one_hot_dim=None,
+    gcm_dict=None,
+    rcm_dict=None,
+    gcm_list=None,
+    rcm_list=None,
+    temporal=False,
+    temporal_concat_input=False,
+):
+    if not cfg.model.dropout:
+        current_model.eval()
+
+    samples = []
+    trues = []
+    s1, s2 = get_spatial_dims_from_mode(mode_unnorm)
+
+    with torch.no_grad():
+        n_batches = 0
+        for data_te in current_test_loader:
+            if temporal:
+                x_prev_te, xc_prev_te, y_prev_te, x_te, xc_te, y_te = data_te
+                _ = x_prev_te
+                xc_prev_te = xc_prev_te.to(device)
+                y_prev_te = y_prev_te.to(device)
+            else:
+                x_te, xc_te, y_te = data_te
+                y_prev_te = None
+
+            x_te = x_te.to(device)
+            xc_te = xc_te.to(device)
+            y_te = y_te.to(device)
+
+            x_te_flat = x_te.view(x_te.shape[0], -1)
+            if not conv:
+                y_te = y_te.view(y_te.shape[0], -1)
+                xc_te = xc_te.view(xc_te.shape[0], -1)
+
+            sample_kwargs = {}
+            if temporal and y_prev_te is not None and not temporal_concat_input:
+                sample_kwargs["y_prev"] = y_prev_te
+
+            if input_mode == "x":
+                if temporal and temporal_concat_input:
+                    model_in = torch.cat([x_te_flat, xc_prev_te.view(xc_prev_te.shape[0], -1)], dim=1)
+                else:
+                    model_in = x_te_flat
+            elif input_mode == "xc":
+                model_in = xc_te
+                if cfg.model.add_x_in_super:
+                    model_in = torch.cat([model_in, x_te_flat[:, :720]], dim=1)
+
+                if not cfg.model.nicolai_layers:
+                    model_in = add_one_hot(
+                        model_in,
+                        one_hot_in_super=one_hot_in_super,
+                        conv=conv,
+                        x=x_te_flat,
+                        one_hot_dim=one_hot_dim,
+                    )
+                elif one_hot_in_super:
+                    if one_hot_dim is None:
+                        raise ValueError("one_hot_dim must be set when one_hot_in_super is enabled.")
+                    if cfg.data.ignore_one_hot_gcm:
+                        cls_ids = torch.argmax(x_te_flat[:, -one_hot_dim:], dim=1)
+                    else:
+                        if gcm_dict is None or rcm_dict is None:
+                            raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
+                        cls_ids_np = get_run_index_from_onehot(
+                            x_te_flat[:, -one_hot_dim:],
+                            gcm_dict=gcm_dict,
+                            rcm_dict=rcm_dict,
+                            rcm_list=rcm_list,
+                            gcm_list=gcm_list,
+                        )
+                        cls_ids = torch.from_numpy(cls_ids_np).to(model_in.device)
+                    sample_kwargs["cls_ids"] = cls_ids
+            else:
+                raise ValueError(f"Unknown input_mode: {input_mode}")
+
+            gen = current_model.sample(model_in, sample_size=5, **sample_kwargs)
+
+            gen_raw_allvars_list = []
+            for i, var in enumerate(cfg.data.variables):
+                norm_stats_var = norm_stats[var] if norm_stats is not None else None
+
+                gen_raw_var_list = []
+                for j in range(5):
+                    if len(gen.shape) == 4:
+                        gen_var_sample = gen[:, i, :, j]
+                    elif len(gen.shape) == 3:
+                        dim_per_var = gen.size(1) // len(cfg.data.variables)
+                        gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
+                    else:
+                        raise ValueError(f"Unexpected sample tensor shape: {gen.shape}")
+                    gen_raw = unnormalise(
+                        gen_var_sample,
+                        var=var,
+                        mode=mode_unnorm,
+                        s1=s1,
+                        s2=s2,
+                        cfg=cfg.data.preprocessing,
+                        norm_stats=norm_stats_var,
+                    )
+                    gen_raw_var_list.append(gen_raw)
+
+                gen_raw_var = torch.stack(gen_raw_var_list, dim=-1)
+                gen_raw_allvars_list.append(gen_raw_var)
+            gen_raw_allvars = torch.stack(gen_raw_allvars_list, dim=1)
+
+            y_ref = y_te if output_mode == "y" else xc_te
+            y_te_raw_allvars_list = []
+            for i, var in enumerate(cfg.data.variables):
+                norm_stats_var = norm_stats[var] if norm_stats is not None else None
+
+                if len(y_ref.shape) == 3:
+                    y_var = y_ref[:, i, :]
+                elif len(y_ref.shape) == 2:
+                    dim_per_var = y_ref.size(1) // len(cfg.data.variables)
+                    y_var = y_ref[:, i * dim_per_var:(i + 1) * dim_per_var]
+                else:
+                    raise ValueError(f"Unexpected target tensor shape: {y_ref.shape}")
+
+                y_raw = unnormalise(
+                    y_var,
+                    var=var,
+                    mode=mode_unnorm,
+                    s1=s1,
+                    s2=s2,
+                    cfg=cfg.data.preprocessing,
+                    norm_stats=norm_stats_var,
+                )
+                y_te_raw_allvars_list.append(y_raw)
+            y_te_raw_allvars = torch.stack(y_te_raw_allvars_list, dim=1)
+
+            samples.append(gen_raw_allvars)
+            trues.append(y_te_raw_allvars)
+            n_batches += 1
+            if n_batches > 2:
+                break
+
+    current_model.train()
+    samples = torch.cat(samples, dim=0)
+    trues = torch.cat(trues, dim=0)
+    return trues, samples
+
+
+def plot_rh(trues, samples, epoch_idx, save_dir, file_suffix="", include_quantile=True):
+    forecasts = torch.amax(samples, dim=(-3, -2))
+    ground_truth = torch.amax(trues, dim=(-2, -1))
+    hist, mean, variance = compute_rank_histogram(ground_truth, forecasts, axis=-1, method="min")
+    _ = (mean, variance)
+    plt.bar(range(1, forecasts.shape[-1] + 2), hist[0])
+    plt.title("Rank histogram for spatial max")
+    plt.savefig(save_dir + f"rank_hist_spatial-max_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300)
+    plt.close()
+
+    if include_quantile:
+        q = 0.99
+        forecasts = torch.quantile(samples.flatten(-3, -2), q, dim=-2)
+        ground_truth = torch.quantile(trues.flatten(-2, -1), q, dim=-1)
+        hist, _, _ = compute_rank_histogram(ground_truth, forecasts, axis=-1, method="min")
+        plt.bar(range(1, forecasts.shape[-1] + 2), hist[0])
+        plt.title("Rank histogram for spatial q0.99")
+        plt.savefig(save_dir + f"rank_hist_spatial-quantile0.99_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300)
+        plt.close()
+
+    forecasts = torch.mean(samples, dim=(-3, -2))
+    ground_truth = torch.mean(trues, dim=(-2, -1))
+    hist, _, _ = compute_rank_histogram(ground_truth, forecasts, axis=-1, method="min")
+    plt.bar(range(1, forecasts.shape[-1] + 2), hist[0])
+    plt.title("Rank histogram for spatial mean")
+    plt.savefig(save_dir + f"rank_hist_spatial-mean_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300)
+    plt.close()
+
 # ---------- NORMALISATION HELPERS -----------------------------------
 
 def apply_variable_transform(x, var, sqrt_cfg):
@@ -211,7 +638,11 @@ def get_mode_from_kernel_size(kernel_size_hr):
         raise ValueError(f"Unknown kernel_size_hr: {kernel_size_hr}")
 
 def load_norm_stats(cfg, mode, var, suffix, device=None):
-    pattern = cfg.stats.pattern[cfg.method]
+    if mode == "lr":
+        norm_method = cfg.norm_method_input
+    elif mode == "hr":
+        norm_method = cfg.norm_method_output
+    pattern = cfg.stats.pattern[norm_method]
     path = os.path.join(
         cfg.stats.root,
         pattern.format(
@@ -223,34 +654,35 @@ def load_norm_stats(cfg, mode, var, suffix, device=None):
     stats = torch.load(path, map_location=device)
     return stats
 
-def load_norm_stats_for_variables(cfg, variables, kernel_size_hr, data_dir, device=None):
+def load_norm_stats_for_variables(cfg, mode, variables, device=None):
     """Load normalisation statistics for all variables.
     
     Args:
         cfg: Preprocessing config object with sqrt_transform and normalisation settings
         variables: List of variable names
         kernel_size_hr: Kernel size for high resolution (determines mode)
-        data_dir: Root directory containing norm_stats
         device: Device to load tensors to
         
     Returns:
         Dictionary mapping variable names to norm_stats tensors (or None if not applicable)
     """
     norm_stats_dict = {}
-    mode = get_mode_from_kernel_size(kernel_size_hr)
+    # mode = get_mode_from_kernel_size(kernel_size_hr)
     
     # Only load norm stats for HR full resolution (kernel_size_hr == 1)
-    if kernel_size_hr != 1:
-        for var in variables:
-            norm_stats_dict[var] = None
-        return norm_stats_dict
+    #if kernel_size_hr != 1:
+    #    for var in variables:
+    #        norm_stats_dict[var] = None
+    #    return norm_stats_dict
     
     for var in variables:
         # Determine if this variable uses sqrt transform
-        suffix = "_sqrt" if cfg.sqrt_transform.get(var, False) else ""
-        
+        if mode == "lr":
+            suffix = "_sqrt" if cfg.sqrt_transform_in.get(var, False) else ""
+        elif mode == "hr":
+            suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
         norm_stats_dict[var] = load_norm_stats(
-            cfg.preprocessing,
+            cfg,
             mode,
             var,
             suffix,
@@ -274,24 +706,30 @@ def normalise(
     var,
     mode,
     cfg,
-    norm_stats=None,
-):
+    norm_stats=None):
+    
+    
     # 1. Variable transforms
-    data = apply_variable_transform(data, var, cfg.sqrt_transform)
-
-    suffix = "_sqrt" if cfg.sqrt_transform.get(var, False) else ""
+    if mode == "lr":
+        data = apply_variable_transform(data, var, cfg.sqrt_transform_in)
+        suffix = "_sqrt" if cfg.sqrt_transform_in.get(var, False) else ""
+        norm_method = cfg.norm_method_input
+    elif mode == "hr":
+        data = apply_variable_transform(data, var, cfg.sqrt_transform_out)
+        suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
+        norm_method = cfg.norm_method_output
 
     # 2. Normalisation
-    if not cfg.normalisation.apply or cfg.normalisation.method == "none":
+    if norm_method == "none":
         data_norm = data
 
-    elif cfg.normalisation.method == "primitive":
+    elif norm_method == "primitive":
         data_norm = primitive_normalise(data, var)
 
-    elif cfg.normalisation.method in {"normalise_pw", "normalise_scalar"}:
+    elif norm_method in {"normalise_pw", "normalise_scalar"}:
         if norm_stats is None:
             norm_stats = load_norm_stats(
-                cfg.normalisation,
+                cfg,
                 mode,
                 var,
                 suffix,
@@ -299,10 +737,10 @@ def normalise(
             )
         data_norm = (data - norm_stats["mean"]) / norm_stats["std"]
 
-    elif cfg.normalisation.method == "uniform":
+    elif norm_method == "uniform":
         if norm_stats is None:
             norm_stats = load_norm_stats(
-                cfg.normalisation,
+                cfg,
                 mode,
                 var,
                 suffix,
@@ -310,7 +748,7 @@ def normalise(
         data_norm = ecdf_normalise(data, norm_stats)
 
     else:
-        raise ValueError(f"Unknown norm method: {cfg.normalisation.method}")
+        raise ValueError(f"Unknown norm method: {norm_method}")
 
     # 3. Flatten (always last)
     data_norm = data_norm.reshape(data_norm.shape[0], -1)
@@ -355,46 +793,63 @@ def unnormalise(
     if cfg.post_transform.gaussian:
         data_np = data_unnorm.detach().cpu().numpy()
         data_unnorm = torch.from_numpy(scipy.stats.norm.cdf(data_np)).to(data_unnorm.dtype).to(data_unnorm.device)
+    # Only apply unnormalisation for full-resolution HR outputs
+    # For coarsened HR (mode != 'hr') we skip norm-based unnormalisation and
+    # simply reverse post-transforms and variable transforms.
+    if mode != "hr":
+        # reshape if needed
+        if data_unnorm.dim() == 2:
+            data = data_unnorm.view(data_unnorm.shape[0], s1, s2)
+        else:
+            data = data_unnorm
+        # use output sqrt config for HR-derived fields
+        sqrt_cfg = cfg.sqrt_transform_out if hasattr(cfg, 'sqrt_transform_out') else {}
+        data_reshaped = reverse_variable_transform(data, var, sqrt_cfg)
+        return data_reshaped
 
-    # 2. Unnormalisation
-    if not cfg.normalisation.apply or cfg.normalisation.method == "none":
+    # mode == 'hr' -> perform normal unnormalisation using configured methods
+    if mode == "hr":
+        norm_method = cfg.norm_method_output
+    elif mode == "lr":
+        norm_method = cfg.norm_method_input
+    else:
+        norm_method = None
+
+    # 2. Unnormalisation for HR
+    
+    if norm_method is None or norm_method == "none":
         data = data_unnorm
-
-    elif cfg.normalisation.method == "primitive":
+    elif norm_method == "primitive":
+        data_unnorm = data_unnorm.view(data_unnorm.shape[0], s1, s2)
         data = primitive_unnormalise(data_unnorm, var)
-
-    elif cfg.normalisation.method in {"normalise_pw", "normalise_scalar"}:
+    elif norm_method in {"normalise_pw", "normalise_scalar"}:
         if norm_stats is None:
-            suffix = "_sqrt" if cfg.sqrt_transform.get(var, False) else ""
+            suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
             norm_stats = load_norm_stats(
-                cfg.normalisation,
+                cfg,
                 mode,
                 var,
                 suffix,
                 device=data_unnorm.device if torch.is_tensor(data_unnorm) else None,
             )
-        # move norm stats to the same device as data
         device = data_unnorm.device
         mean = norm_stats["mean"].to(device)
         std = norm_stats["std"].to(device)
+        data_unnorm = data_unnorm.view(data_unnorm.shape[0], s1, s2)
         data = data_unnorm * std + mean
-
-    elif cfg.normalisation.method == "uniform":
+    elif norm_method == "uniform":
         if norm_stats is None:
-            suffix = "_sqrt" if cfg.sqrt_transform.get(var, False) else ""
+            suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
             norm_stats = load_norm_stats(
-                cfg.normalisation,
+                cfg,
                 mode,
                 var,
                 suffix,
             )
-        
         len_full_data = norm_stats.shape[0] if isinstance(norm_stats, torch.Tensor) else norm_stats.shape[0]
         probs = torch.linspace(1, len_full_data, len_full_data) / (len_full_data + 1)
-        
         data = torch.zeros(data_unnorm.shape[0], s1, s2)
         data_unnorm_reshaped = data_unnorm.view(data_unnorm.shape[0], s1, s2)
-        
         for i in range(s1):
             for j in range(s2):
                 quantiles = norm_stats[:, i, j]
@@ -403,17 +858,17 @@ def unnormalise(
                     probs, 
                     quantiles.detach().cpu().numpy()
                 ))
-
     else:
-        raise ValueError(f"Unknown norm method: {cfg.normalisation.method}")
+        raise ValueError(f"Unknown norm method")
 
     # 3. Reshape to spatial dimensions
     data_reshaped = data.view(data.shape[0], s1, s2) if not torch.is_tensor(data) or len(data.shape) == 1 else (
         data if len(data.shape) == 3 else data.view(data.shape[0], s1, s2)
     )
 
-    # 4. Reverse variable transforms
-    data_reshaped = reverse_variable_transform(data_reshaped, var, cfg.sqrt_transform)
+    # 4. Reverse variable transforms (use output sqrt config for HR)
+    sqrt_cfg_final = cfg.sqrt_transform_out if hasattr(cfg, 'sqrt_transform_out') else {}
+    data_reshaped = reverse_variable_transform(data_reshaped, var, sqrt_cfg_final)
 
     return data_reshaped
 
