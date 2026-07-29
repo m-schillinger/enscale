@@ -1,5 +1,5 @@
 import yaml
-from config import Config, DataPreprocessing
+from enscale.archive.config import Config, DataPreprocessing
 
 def load_config(path: str) -> Config:
     with open(path, "r") as f:

@@ -6,9 +6,9 @@ from modules_cnn import Generator16x, Generator4x, Generator4xConcat, Generator2
 from modules_loc_variant import RectUpsampleWithResiduals
 from loss_func import energy_loss_two_sample, avg_constraint_per_var, energy_loss_multivariate_summed, norm_loss_multivariate_summed
 
-from data import get_data
+from data_v2 import get_data_v2
 import argparse
-from load_config import load_config
+from enscale.archive.load_config import load_config
 from utils import *
 import sys
 import time
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     encoding_scheme = get_ensemble_encoding_scheme(cfg)
     
     #### load data
-    train_loader, test_loader_in = get_data(cfg, test_size=0.1, shuffle=True)
+    train_loader, test_loader_in = get_data_v2(cfg, test_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))

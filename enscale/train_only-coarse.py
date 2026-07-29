@@ -1,4 +1,4 @@
-from data import get_data
+from data_v2 import get_data_v2
 import torch
 import os
 import random
@@ -8,7 +8,7 @@ from modules import StoUNet, LinearModel, MultipleStoUNetWrapper, MeanResidualWr
 from loss_func import energy_loss_two_sample, norm_loss_multivariate_summed
 
 import argparse
-from load_config import load_config
+from enscale.archive.load_config import load_config
 from utils import *
 import sys
 import pdb
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     else:
         return_timepair = False
     
-    train_loader, test_loader_in = get_data(cfg, test_size=0.1, shuffle=True)
+    train_loader, test_loader_in = get_data_v2(cfg, test_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     if cfg.model.method == "eng_temporal":

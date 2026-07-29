@@ -22,26 +22,15 @@ data:
     precip_zeros: "constant"
     data_dir: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
 
-  preprocessing:
-    sqrt_transform:
-      pr: true
-      sfcWind: true
-
-    normalisation:
-      method: normalise_pw        # primitive | normalise_pw | normalise_scalar | uniform | none
-      apply: true
-
-      stats:
-        root: /r/scratch/.../norm_stats
-        pattern:
-          primitive: null
-          normalise_pw: "{mode}_norm_stats_pixelwise_{var}_train_ALL{suffix}.pt"
-          normalise_scalar: "{mode}_norm_stats_full-data_{var}_train_ALL{suffix}.pt"
-          uniform: "{mode}_norm_stats_ecdf_matrix_{var}_train_SUBSAMPLE{suffix}.pt"
-
-    post_transform:
-      logit: false
-      gaussian: false
+preprocessing:
+    norm_method_input: "normalise_scalar"
+    norm_method_output: "uniform"
+    logit_transform: False
+    normal_transform: True
+    sqrt_transform_out: False
+    sqrt_transform_in: False
+    sep_mean_std: False
+    fft: False
 
 # -------------------------
 # Model architecture

@@ -1,0 +1,32 @@
+inherits_from: "config_train_v2_example.yaml"
+
+# Inference overrides only.
+inference:
+  checkpoint_source: train_output
+  train_run_dir: "results/eng_2step/super/lr16_hr8/var-tas_pr_sfcWind_rsds/example_run/"
+  split: inference
+  submode: new_region_a
+  batch_size: 1024
+  data_modes:
+    test:
+      default:
+        folder: "test/default"
+        file_suffix: ""
+      submodes:
+        interpolation_2030s:
+          folder: "test/interpolation"
+          file_suffix: "_2030-2039"
+        extrapolation_2090s:
+          folder: "test/extrapolation"
+          file_suffix: "_2090-2099"
+    inference:
+      default:
+        folder: "inference/default"
+        file_suffix: ""
+      submodes:
+        new_region_a:
+          folder: "inference/new_region_a"
+          file_suffix: ""
+        new_region_c:
+          folder: "inference/new_region_c"
+          file_suffix: ""

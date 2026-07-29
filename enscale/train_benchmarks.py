@@ -6,8 +6,8 @@ from torchvision.utils import make_grid
 from modules import StoUNet, RankValModel, LinearModel, MultivariateStoUNetWrapper, StoUNetNoiseEnd
 from loss_func import energy_loss_two_sample, energy_loss_rk_val_wrapper, ridge_loss, crps_pixelwise
 
-from enscale.data_old import get_data, get_data_2step_naive_avg
-from config import get_config
+from enscale.archive.data_old import get_data, get_data_2step_naive_avg
+from enscale.archive.config import get_config
 from utils import *
 import sys
 import pdb

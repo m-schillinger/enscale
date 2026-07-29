@@ -30,14 +30,36 @@ Normalisation options (all of them are done separately for each climate variable
 - normalise_scalar: scaling of the entire field by mean and std
 - uniform: transformation to uniform pointwise; load pre-computed ECDF from disk and interpolate data to it
 
+The normalization statistics are generated with two dedicated scripts:
+- `compute_norm_stats_general.py`: computes stats from train data folders by variable, with automatic discovery or per-variable subset filtering.
+- `compute_uniform_prenorm_data.py`: turns HR data into pre-normalized uniform fields using saved ECDF stats.
+
+Both scripts keep the existing payload formats used by training:
+- `normalize_scalar`: mean/std over the whole field
+- `normalize_pw`: mean/std per pixel
+- `uniform`: ECDF matrix for HR data only
+
+Supported options in `compute_norm_stats_general.py`:
+- HR and LR data
+- `normalize_scalar`, `normalize_pw`, and `uniform`
+- with and without sqrt
+- HR uniform subsampling via `--subsample-size`
+
+Supported options in `compute_uniform_prenorm_data.py`:
+- HR data only
+- 1/(n+1) inverse ECDF transform
+- flipped ECDF matrix back to xarray orientation
+- precip zero handling via `--zero-mode constant|random_ties|random_image`
+
 **Notes on uniform distribution:**
 - normalisation is costly, so we did this in advance and then only load the normalised data from disk. `normalise` for `norm_method = "uniform"` is not called during training
 - uniform transformation can be combined with logit transformation or "normal" transformation: logit just applies the logit function to map from normalised data (which are probabilities between 0 and 1) to the real line; "normal" transformation applies the inverse of the standard normal CDF to map to the real line, so the resulting data are "normal scores"
 
 ## If you want to re-train with your own data
 
-1. Preprocess data or compute normalisation statistics (see template in `compute_norm_stats.ipynb`).
-2. Adjust dataloading with your paths to the data.
+1. Preprocess data or compute normalisation statistics with `compute_norm_stats_general.py`.
+2. If you use uniform normalization, generate pre-normalised HR fields with `compute_uniform_prenorm_data.py`.
+3. Adjust dataloading with your paths to the data.
 
 **More will follow.**
 
