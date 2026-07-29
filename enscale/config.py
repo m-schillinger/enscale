@@ -72,6 +72,8 @@ class DataConfig:
     ensemble_encoding: dict = field(default_factory=dict)
     # single_pair reader mapping (kept generic)
     single_pair: dict = field(default_factory=dict)
+    # generic pattern reader config
+    patterns: dict = field(default_factory=dict)
     
     kernel_size_lr: int = 1
     stride_lr: Optional[int] = None
@@ -82,9 +84,13 @@ class DataConfig:
     n_models: int = 1
     return_timepair: bool = False
     run_indices: Optional[List[int]] = None
-    ignore_one_hot_gcm: bool = False
-    ignore_one_hot_rcm: bool = False 
     random_state: int = 42
+    validation_source: str = "auto"
+    validation_size: Optional[float] = None
+    validation_mode: Optional[str] = None
+    test_mode: Optional[str] = None
+    inference_mode: bool = False
+    inference_fill_value: str = "zeros"
     
     precip_zeros: str = "random"
     data_dir: str = "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
@@ -101,11 +107,18 @@ class DataConfig:
         self.n_models = int(self.n_models)
         
         self.run_indices = self._coerce_optional_list(self.run_indices, int)
-        self.ignore_one_hot_gcm = bool(self.ignore_one_hot_gcm)
-        self.ignore_one_hot_rcm = bool(self.ignore_one_hot_rcm)
         self.return_timepair = bool(self.return_timepair)
+        self.inference_mode = bool(self.inference_mode)
         # floats
+        if self.validation_size is not None:
+            self.validation_size = float(self.validation_size)
         # strings
+        self.validation_source = str(self.validation_source).lower()
+        if self.validation_mode is not None:
+            self.validation_mode = str(self.validation_mode)
+        if self.test_mode is not None:
+            self.test_mode = str(self.test_mode)
+        self.inference_fill_value = str(self.inference_fill_value).lower()
         self.precip_zeros = str(self.precip_zeros)
         self.data_dir = str(self.data_dir)
         # ensure preprocessing exists
@@ -126,9 +139,22 @@ class DataConfig:
         # ensemble_encoding as dict
         if self.ensemble_encoding is None:
             self.ensemble_encoding = {}
+        if not isinstance(self.ensemble_encoding, dict):
+            raise ValueError("ensemble_encoding must be a mapping with keys 'enabled' and 'scheme'")
+        enabled = bool(self.ensemble_encoding.get("enabled", False))
+        scheme = str(self.ensemble_encoding.get("scheme", "gcm+rcm"))
+        valid_schemes = {"gcm", "rcm", "gcm+rcm"}
+        if enabled and scheme not in valid_schemes:
+            raise ValueError(
+                f"Unknown ensemble_encoding.scheme: {scheme}. "
+                f"Expected one of {sorted(valid_schemes)}"
+            )
+        self.ensemble_encoding = {"enabled": enabled, "scheme": scheme}
         # single_pair as dict
         if self.single_pair is None:
             self.single_pair = {}
+        if self.patterns is None:
+            self.patterns = {}
 
     @staticmethod
     def _coerce_list(val, element_type):
@@ -164,6 +190,13 @@ class DataPreprocessing:
     sqrt_transform_out: dict = field(default_factory=dict)
     sqrt_transform_in: dict = field(default_factory=dict)
     sep_mean_std: bool = False
+    use_precomputed_hr: bool = False
+    normalized_hr_root: str = ""
+    normalized_hr_pattern: str = ""
+    normalized_hr_modes: dict = field(default_factory=dict)
+    normalized_hr_suffix_by_var: dict = field(default_factory=dict)
+    normalized_hr_default_suffix: str = ""
+    normalized_hr_filter_outliers: bool = False
     # stats and post_transform are nested structures in the YAML
     @dataclass
     class PostTransform:
@@ -187,11 +220,24 @@ class DataPreprocessing:
         # bools
         self.fft = bool(self.fft)
         self.sep_mean_std = bool(self.sep_mean_std)
+        self.use_precomputed_hr = bool(self.use_precomputed_hr)
+        self.normalized_hr_root = str(self.normalized_hr_root)
+        self.normalized_hr_pattern = str(self.normalized_hr_pattern)
+        self.normalized_hr_filter_outliers = bool(self.normalized_hr_filter_outliers)
+        self.normalized_hr_default_suffix = str(self.normalized_hr_default_suffix)
         # dicts: ensure dict types for sqrt transforms and stats.pattern
         if self.sqrt_transform_in is None:
             self.sqrt_transform_in = {}
         if self.sqrt_transform_out is None:
             self.sqrt_transform_out = {}
+        if self.normalized_hr_suffix_by_var is None:
+            self.normalized_hr_suffix_by_var = {}
+        if self.normalized_hr_modes is None:
+            self.normalized_hr_modes = {}
+        if not isinstance(self.normalized_hr_suffix_by_var, dict):
+            raise ValueError("normalized_hr_suffix_by_var must be a dict")
+        if not isinstance(self.normalized_hr_modes, dict):
+            raise ValueError("normalized_hr_modes must be a dict")
         # coerce nested dicts to dataclasses when loaded from YAML
         if isinstance(self.stats, dict):
             self.stats = DataPreprocessing.StatsConfig(**self.stats)

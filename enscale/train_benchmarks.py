@@ -11,6 +11,7 @@ from config import get_config
 from utils import *
 import sys
 import pdb
+from types import SimpleNamespace
 sys.path.append("..")
 
     
@@ -53,13 +54,47 @@ if __name__ == '__main__':
     
     device = torch.device('cuda')
     
-    if args.server == "euler":
-        prefix = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/"
-    elif args.server == "ada":
-        prefix = "results/"
-    
     variables_str = '_'.join(args.variables)
-    save_dir = prefix + f"{args.method}/var-{variables_str}/hidden{args.hidden_dim}_norm-in-{args.norm_method_input}_norm-out-{args.norm_method_output}{args.save_name}/"
+    cfg_for_save_dir = SimpleNamespace(
+        general=SimpleNamespace(
+            server=args.server,
+            save_name=args.save_name,
+            save_dir_root_local="results",
+            save_dir_root_server="/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results",
+            save_dir_pattern=getattr(
+                args,
+                "save_dir_pattern",
+                "{method}/var-{variables}/hidden{hidden_dim}_norm-in-{norm_method_input}_norm-out-{norm_method_output}{save_name}/",
+            ),
+        ),
+        model=SimpleNamespace(
+            method=args.method,
+            hidden_dim=args.hidden_dim,
+            num_layer=getattr(args, "num_layer", 0),
+            layer_shrinkage=getattr(args, "layer_shrinkage", 0),
+            conv=getattr(args, "conv", False),
+            conv_concat=getattr(args, "conv_concat", False),
+            conv_dim=getattr(args, "conv_dim", 0),
+            nicolai_layers=getattr(args, "nicolai_layers", False),
+        ),
+        loss=SimpleNamespace(avg_constraint=getattr(args, "avg_constraint", False)),
+        data=SimpleNamespace(
+            preprocessing=SimpleNamespace(
+                norm_method_output=args.norm_method_output,
+                norm_method_input=args.norm_method_input,
+            ),
+            kernel_size_lr=getattr(args, "kernel_size_lr", 16),
+            kernel_size_hr=getattr(args, "kernel_size_hr", 1),
+            run_indices=getattr(args, "run_indices", None),
+        ),
+        preprocessing=SimpleNamespace(sqrt_transform_out=getattr(args, "sqrt_transform_out", False)),
+        sparse_layers=SimpleNamespace(
+            num_neighbors_res=getattr(args, "num_neighbors_res", ""),
+            num_neighbors_ups=getattr(args, "num_neighbors_ups", ""),
+            latent_dim=getattr(args, "latent_dim", ""),
+        ),
+    )
+    save_dir = build_save_dir(cfg_for_save_dir, variables_str)
     make_folder(save_dir)
     write_config_to_file(args, save_dir)
     

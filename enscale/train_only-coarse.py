@@ -47,26 +47,12 @@ if __name__ == '__main__':
     
     device = torch.device('cuda')
     
-    if cfg.general.server == "euler":
-        prefix = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/"
-    elif cfg.general.server == "ada":
-        prefix = "results/eng_2step/"
-    
     variables_str = '_'.join(cfg.data.variables)
-    
-    if cfg.model.method == 'eng_2step':
-        # save_dir = f"results/coarse/var-{cfg.data.variables[0]}{cfg.model.method}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}_models-{''.join(map(str, cfg.data.run_indices))}{cfg.general.save_name}/"
-        if cfg.data.kernel_size_lr == 16:
-            # save_dir = prefix + f"coarse/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}{cfg.general.save_name}/"
-            save_dir = prefix + f"coarse/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        else:
-            save_dir = prefix + f"coarse/kernel-{cfg.data.kernel_size_lr}/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}{cfg.general.save_name}/"
-    elif cfg.model.method == 'nn_det' or cfg.model.method == "residual" or cfg.model.method == "residual_from_mean":
-        save_dir = prefix + f"coarse/{cfg.model.method}/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}{cfg.general.save_name}/"
-    elif cfg.model.method == 'linear':
-        save_dir = prefix + f"coarse/var-{variables_str}/{cfg.model.method}/sqrt-{cfg.preprocessing.sqrt_transform_out}_models-{''.join(map(str, cfg.data.run_indices))}{cfg.general.save_name}/"
-    elif cfg.model.method == 'eng_temporal':
-        save_dir = prefix + f"coarse_temporal/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+
+    if cfg.model.method == 'eng_temporal':
+        save_dir = build_save_dir(cfg, variables_str, stage="coarse_temporal")
+    else:
+        save_dir = build_save_dir(cfg, variables_str, stage="coarse")
     make_folder(save_dir)
     write_config_to_file(cfg, save_dir)
     
@@ -190,7 +176,23 @@ if __name__ == '__main__':
         
 
     #### build model
-    one_hot_dim = 4 if cfg.data.ignore_one_hot_gcm else 7
+    scheme = get_ensemble_encoding_scheme(cfg)
+    gcm_dict = {}
+    rcm_dict = {}
+    if scheme in {"gcm", "rcm", "gcm+rcm"}:
+        if getattr(cfg.data, "type", "") != "cordex_ensemble":
+            raise ValueError("Ensemble encoding requires data.type='cordex_ensemble'.")
+        root_for_combinations = getattr(cfg.data.cordex, "root", None) or cfg.data.data_dir
+        _, _, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root_for_combinations)
+
+    if scheme == "gcm":
+        one_hot_dim = len(gcm_dict)
+    elif scheme == "rcm":
+        one_hot_dim = len(rcm_dict)
+    elif scheme == "gcm+rcm":
+        one_hot_dim = len(gcm_dict) + len(rcm_dict)
+    else:
+        one_hot_dim = 0
     if cfg.model.method == 'eng_2step' or cfg.model.method == 'eng_temporal':
         if cfg.data.variables_lr is not None:
             n_vars = len(cfg.data.variables_lr)
@@ -328,7 +330,7 @@ if __name__ == '__main__':
             print(f'Built a model with #params: {count_parameters(model)}')            
     
         else:
-            save_dir_nn_det = prefix + f"coarse/nn_det/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}{cfg.general.save_name}/"
+            save_dir_nn_det = build_save_dir(cfg, variables_str, stage="coarse", method="nn_det")
             ckpt_dir = save_dir_nn_det + f"model_{cfg.training.burn_in}.pt"
             model.mean_model.load_state_dict(torch.load(ckpt_dir))
             

@@ -2,7 +2,11 @@
 
 ## Dataloading options
 
-**add note on cordex vs. single pair**
+We've implemented several options for dataloading.
+- Single files
+- 
+
+**need config templates**
 
 ## Data folders
 

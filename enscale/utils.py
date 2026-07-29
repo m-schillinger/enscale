@@ -27,51 +27,111 @@ def write_config_to_file(cfg, save_path, filename="config.yaml"):
             default_flow_style=False,
         )
         
+def _build_default_save_dir_path(cfg, stage, variables_str, subfolder, method=None):
+    method = cfg.model.method if method is None else method
 
-def build_save_dir(cfg, variables_str, subfolder):
-    """Build save_dir path based on config pattern and substituted values."""
-    # Select root directory based on server
+    if stage == "super":
+        return (
+            f"{method}/super/{subfolder}/var-{variables_str}/"
+            f"hidden{cfg.model.hidden_dim}_num-l-{cfg.model.num_layer}_"
+            f"layer-shr-{cfg.model.layer_shrinkage}_avc-c-{cfg.loss.avg_constraint}_"
+            f"norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        )
+
+    if stage == "super_temporal":
+        return (
+            f"super_temporal/{subfolder}/var-{variables_str}/"
+            f"loc-specific-layers_norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        )
+
+    if stage == "coarse_temporal":
+        return (
+            f"coarse_temporal/var-{variables_str}/"
+            f"hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_"
+            f"norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
+        )
+
+    if stage != "coarse":
+        raise ValueError(f"Unknown save_dir stage: {stage}")
+
+    if method == "eng_2step":
+        if cfg.data.kernel_size_lr == 16:
+            return (
+                f"coarse/var-{variables_str}/"
+                f"hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_"
+                f"norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
+            )
+        return (
+            f"coarse/kernel-{cfg.data.kernel_size_lr}/var-{variables_str}/"
+            f"hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_"
+            f"sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}{cfg.general.save_name}/"
+        )
+
+    if method in {"nn_det", "residual", "residual_from_mean"}:
+        return (
+            f"coarse/{method}/var-{variables_str}/"
+            f"hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_"
+            f"sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_"
+            f"lay-shr{cfg.model.layer_shrinkage}{cfg.general.save_name}/"
+        )
+
+    if method == "linear":
+        run_indices = cfg.data.run_indices if cfg.data.run_indices is not None else []
+        return (
+            f"coarse/var-{variables_str}/{method}/"
+            f"sqrt-{cfg.preprocessing.sqrt_transform_out}_"
+            f"models-{''.join(map(str, run_indices))}{cfg.general.save_name}/"
+        )
+
+    return (
+        f"coarse/{method}/var-{variables_str}/"
+        f"hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_"
+        f"norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
+    )
+
+
+def build_save_dir(cfg, variables_str, subfolder="", stage="super", method=None):
+    """Build save_dir from config pattern or a stage-specific fallback default."""
     if cfg.general.server == "ada":
         root = cfg.general.save_dir_root_local
     elif cfg.general.server == "euler":
         root = cfg.general.save_dir_root_server
     else:
         raise ValueError(f"Unknown server: {cfg.general.server}")
-    
-    # Get the pattern from config (or use default if not specified)
-    if hasattr(cfg.general, 'save_dir_pattern') and cfg.general.save_dir_pattern:
-        pattern = cfg.general.save_dir_pattern
+
+    if hasattr(cfg.general, "save_dir_pattern") and cfg.general.save_dir_pattern:
+        method_name = cfg.model.method if method is None else method
+        substitutions = {
+            "method": method_name,
+            "stage": stage,
+            "subfolder": subfolder,
+            "variables": variables_str,
+            "hidden_dim": cfg.model.hidden_dim,
+            "num_layer": cfg.model.num_layer,
+            "layer_shrinkage": cfg.model.layer_shrinkage,
+            "avg_constraint": cfg.loss.avg_constraint,
+            "norm_method_output": cfg.data.preprocessing.norm_method_output,
+            "norm_method_input": cfg.data.preprocessing.norm_method_input,
+            "save_name": cfg.general.save_name,
+            "conv": cfg.model.conv,
+            "conv_concat": cfg.model.conv_concat,
+            "conv_dim": cfg.model.conv_dim,
+            "nicolai_layers": cfg.model.nicolai_layers,
+            "num_neighbors_res": cfg.sparse_layers.num_neighbors_res if hasattr(cfg.sparse_layers, "num_neighbors_res") else "",
+            "num_neighbors_ups": cfg.sparse_layers.num_neighbors_ups if hasattr(cfg.sparse_layers, "num_neighbors_ups") else "",
+            "latent_dim": cfg.sparse_layers.latent_dim if hasattr(cfg.sparse_layers, "latent_dim") else "",
+            "kernel_size_lr": cfg.data.kernel_size_lr,
+            "kernel_size_hr": cfg.data.kernel_size_hr,
+        }
+        try:
+            path = cfg.general.save_dir_pattern.format(**substitutions)
+        except KeyError as e:
+            raise ValueError(f"Unknown placeholder in save_dir_pattern: {e}")
     else:
-        # Fallback pattern for backward compatibility
-        pattern = "{method}/super/{subfolder}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_layer-shr-{layer_shrinkage}_avc-c-{avg_constraint}_norm-out-{norm_method_output}{save_name}/"
-    
-    # Build substitution dictionary with available config parameters
-    substitutions = {
-        'method': cfg.model.method,
-        'subfolder': subfolder,
-        'variables': variables_str,
-        'hidden_dim': cfg.model.hidden_dim,
-        'num_layer': cfg.model.num_layer,
-        'layer_shrinkage': cfg.model.layer_shrinkage,
-        'avg_constraint': cfg.loss.avg_constraint,
-        'norm_method_output': cfg.data.preprocessing.norm_method_output,
-        'norm_method_input': cfg.data.preprocessing.norm_method_input,
-        'save_name': cfg.general.save_name,
-        'conv': cfg.model.conv,
-        'conv_concat': cfg.model.conv_concat,
-        'conv_dim': cfg.model.conv_dim,
-        'nicolai_layers': cfg.model.nicolai_layers,
-        'num_neighbors_res': cfg.sparse_layers.num_neighbors_res if hasattr(cfg.sparse_layers, 'num_neighbors_res') else '',
-        'num_neighbors_ups': cfg.sparse_layers.num_neighbors_ups if hasattr(cfg.sparse_layers, 'num_neighbors_ups') else '',
-        'latent_dim': cfg.sparse_layers.latent_dim if hasattr(cfg.sparse_layers, 'latent_dim') else '',
-    }
-    
-    # Format the pattern with substitutions
-    try:
-        path = pattern.format(**substitutions)
-    except KeyError as e:
-        raise ValueError(f"Unknown placeholder in save_dir_pattern: {e}")
-    
+        path = _build_default_save_dir_path(cfg, stage, variables_str, subfolder, method=method)
+
+    root = root.rstrip("/")
+    path = path.lstrip("/")
     return f"{root}/{path}"
 
         
@@ -164,24 +224,49 @@ def get_run_index(rcm, gcm, rcm_list=None, gcm_list=None, root="/r/scratch/group
     return np.where([rcm_gcms[i] == (rcm, gcm) for i in range(len(rcm_gcms))])[0][0]
 
 
+def get_ensemble_encoding_scheme(cfg):
+    enc_cfg = getattr(cfg.data, "ensemble_encoding", {}) or {}
+    if not isinstance(enc_cfg, dict) or not enc_cfg.get("enabled", False):
+        return None
+
+    scheme = str(enc_cfg.get("scheme", "gcm+rcm"))
+    valid_schemes = {"gcm", "rcm", "gcm+rcm"}
+    if scheme not in valid_schemes:
+        raise ValueError(
+            f"Unknown ensemble encoding scheme: {scheme}. "
+            f"Expected one of {sorted(valid_schemes)}"
+        )
+    return scheme
+
+
 def get_run_index_from_onehot(
     one_hot_vec,
     gcm_dict,
     rcm_dict,
     gcm_list=None,
     rcm_list=None,
-    root="/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
+    root="/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear",
+    mode="joint",
 ):
     """
-    Convert a one-hot encoding (concatenated GCM + RCM) to the run index
-    using get_run_index.
+    Convert one-hot encoding to class IDs.
     
-    one_hot_vec: torch.Tensor [BS, num_gcm + num_rcm]
+    one_hot_vec: torch.Tensor [BS, one_hot_dim]
     gcm_dict, rcm_dict: dicts from names -> indices
     gcm_list, rcm_list: optional, else loaded from root
+    mode: "gcm", "rcm", or "joint" (default)
     """
     if gcm_list is None or rcm_list is None:
         gcm_list, rcm_list, _, _ = get_rcm_gcm_combinations(root)
+
+    if mode == "gcm":
+        return one_hot_vec.argmax(dim=1).cpu().numpy()
+
+    if mode == "rcm":
+        return one_hot_vec.argmax(dim=1).cpu().numpy()
+
+    if mode != "joint":
+        raise ValueError(f"Unknown one-hot mode: {mode}")
 
     num_gcm = len(gcm_dict)
     num_rcm = len(rcm_dict)
@@ -189,8 +274,10 @@ def get_run_index_from_onehot(
     gcm_idx = one_hot_vec[:, :num_gcm].argmax(dim=1).cpu().numpy()
     rcm_idx = one_hot_vec[:, num_gcm:num_gcm+num_rcm].argmax(dim=1).cpu().numpy()
 
-    gcm_names = [list(gcm_dict.keys())[list(gcm_dict.values()).index(i)] for i in gcm_idx]
-    rcm_names = [list(rcm_dict.keys())[list(rcm_dict.values()).index(i)] for i in rcm_idx]
+    inv_gcm_dict = {v: k for k, v in gcm_dict.items()}
+    inv_rcm_dict = {v: k for k, v in rcm_dict.items()}
+    gcm_names = [inv_gcm_dict[i] for i in gcm_idx]
+    rcm_names = [inv_rcm_dict[i] for i in rcm_idx]
     
     run_indices = [get_run_index(r, g, rcm_list, gcm_list, root) for r, g in zip(rcm_names, gcm_names)]
     
@@ -290,19 +377,28 @@ def visual_sample(
         if cfg.model.nicolai_layers and one_hot_in_super:
             if one_hot_dim is None or x_one_hot is None:
                 raise ValueError("one_hot_dim and x_one_hot are required when one_hot_in_super is enabled.")
-            if cfg.data.ignore_one_hot_gcm:
-                cls_ids = torch.argmax(x_one_hot[:, -one_hot_dim:], dim=1)
+            if one_hot_dim <= 0:
+                cls_ids = None
             else:
-                if gcm_dict is None or rcm_dict is None:
-                    raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
-                cls_ids_np = get_run_index_from_onehot(
-                    x_one_hot[:, -one_hot_dim:],
-                    gcm_dict=gcm_dict,
-                    rcm_dict=rcm_dict,
-                    rcm_list=rcm_list,
-                    gcm_list=gcm_list,
-                )
-                cls_ids = torch.from_numpy(cls_ids_np).to(x_in.device)
+                scheme = get_ensemble_encoding_scheme(cfg)
+                if scheme is None:
+                    cls_ids = None
+                elif scheme == "gcm":
+                    cls_ids = torch.argmax(x_one_hot[:, -one_hot_dim:], dim=1)
+                elif scheme == "rcm":
+                    cls_ids = torch.argmax(x_one_hot[:, -one_hot_dim:], dim=1)
+                else:
+                    if gcm_dict is None or rcm_dict is None:
+                        raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
+                    cls_ids_np = get_run_index_from_onehot(
+                        x_one_hot[:, -one_hot_dim:],
+                        gcm_dict=gcm_dict,
+                        rcm_dict=rcm_dict,
+                        rcm_list=rcm_list,
+                        gcm_list=gcm_list,
+                        mode="joint",
+                    )
+                    cls_ids = torch.from_numpy(cls_ids_np).to(x_in.device)
 
         if cls_ids is not None:
             call_kwargs["cls_ids"] = cls_ids
@@ -473,19 +569,24 @@ def get_eval_samples(
                 elif one_hot_in_super:
                     if one_hot_dim is None:
                         raise ValueError("one_hot_dim must be set when one_hot_in_super is enabled.")
-                    if cfg.data.ignore_one_hot_gcm:
-                        cls_ids = torch.argmax(x_te_flat[:, -one_hot_dim:], dim=1)
+                    if one_hot_dim <= 0:
+                        cls_ids = None
                     else:
-                        if gcm_dict is None or rcm_dict is None:
-                            raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
-                        cls_ids_np = get_run_index_from_onehot(
-                            x_te_flat[:, -one_hot_dim:],
-                            gcm_dict=gcm_dict,
-                            rcm_dict=rcm_dict,
-                            rcm_list=rcm_list,
-                            gcm_list=gcm_list,
-                        )
-                        cls_ids = torch.from_numpy(cls_ids_np).to(model_in.device)
+                        scheme = get_ensemble_encoding_scheme(cfg)
+                        if scheme in {"gcm", "rcm"}:
+                            cls_ids = torch.argmax(x_te_flat[:, -one_hot_dim:], dim=1)
+                        else:
+                            if gcm_dict is None or rcm_dict is None:
+                                raise ValueError("gcm_dict and rcm_dict are required to infer class IDs.")
+                            cls_ids_np = get_run_index_from_onehot(
+                                x_te_flat[:, -one_hot_dim:],
+                                gcm_dict=gcm_dict,
+                                rcm_dict=rcm_dict,
+                                rcm_list=rcm_list,
+                                gcm_list=gcm_list,
+                                mode="joint",
+                            )
+                            cls_ids = torch.from_numpy(cls_ids_np).to(model_in.device)
                     sample_kwargs["cls_ids"] = cls_ids
             else:
                 raise ValueError(f"Unknown input_mode: {input_mode}")
@@ -706,49 +807,54 @@ def normalise(
     var,
     mode,
     cfg,
-    norm_stats=None):
-    
-    
-    # 1. Variable transforms
-    if mode == "lr":
-        data = apply_variable_transform(data, var, cfg.sqrt_transform_in)
-        suffix = "_sqrt" if cfg.sqrt_transform_in.get(var, False) else ""
-        norm_method = cfg.norm_method_input
-    elif mode == "hr":
-        data = apply_variable_transform(data, var, cfg.sqrt_transform_out)
-        suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
-        norm_method = cfg.norm_method_output
+    norm_stats=None,
+    skip_normalization: bool = False):
 
-    # 2. Normalisation
-    if norm_method == "none":
+    if skip_normalization:
         data_norm = data
-
-    elif norm_method == "primitive":
-        data_norm = primitive_normalise(data, var)
-
-    elif norm_method in {"normalise_pw", "normalise_scalar"}:
-        if norm_stats is None:
-            norm_stats = load_norm_stats(
-                cfg,
-                mode,
-                var,
-                suffix,
-                device=data.device if torch.is_tensor(data) else None,
-            )
-        data_norm = (data - norm_stats["mean"]) / norm_stats["std"]
-
-    elif norm_method == "uniform":
-        if norm_stats is None:
-            norm_stats = load_norm_stats(
-                cfg,
-                mode,
-                var,
-                suffix,
-            )
-        data_norm = ecdf_normalise(data, norm_stats)
-
     else:
-        raise ValueError(f"Unknown norm method: {norm_method}")
+        # 1. Variable transforms
+        if mode == "lr":
+            data = apply_variable_transform(data, var, cfg.sqrt_transform_in)
+            suffix = "_sqrt" if cfg.sqrt_transform_in.get(var, False) else ""
+            norm_method = cfg.norm_method_input
+        elif mode == "hr":
+            data = apply_variable_transform(data, var, cfg.sqrt_transform_out)
+            suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
+            norm_method = cfg.norm_method_output
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        # 2. Normalisation
+        if norm_method == "none":
+            data_norm = data
+
+        elif norm_method == "primitive":
+            data_norm = primitive_normalise(data, var)
+
+        elif norm_method in {"normalise_pw", "normalise_scalar"}:
+            if norm_stats is None:
+                norm_stats = load_norm_stats(
+                    cfg,
+                    mode,
+                    var,
+                    suffix,
+                    device=data.device if torch.is_tensor(data) else None,
+                )
+            data_norm = (data - norm_stats["mean"]) / norm_stats["std"]
+
+        elif norm_method == "uniform":
+            if norm_stats is None:
+                norm_stats = load_norm_stats(
+                    cfg,
+                    mode,
+                    var,
+                    suffix,
+                )
+            data_norm = ecdf_normalise(data, norm_stats)
+
+        else:
+            raise ValueError(f"Unknown norm method: {norm_method}")
 
     # 3. Flatten (always last)
     data_norm = data_norm.reshape(data_norm.shape[0], -1)

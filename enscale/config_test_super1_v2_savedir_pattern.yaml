@@ -10,7 +10,14 @@ general:
     server: "ada"
     save_dir_root_local: "results"
     save_dir_root_server: "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results"
-    save_dir_pattern: "{method}/super/{subfolder}/var-{variables}/{save_name}/"
+    # Optional override for save directory layout.
+    # Supported placeholders include:
+    # {method}, {stage}, {subfolder}, {variables}, {hidden_dim}, {num_layer},
+    # {layer_shrinkage}, {avg_constraint}, {norm_method_input}, {norm_method_output},
+    # {save_name}, {conv}, {conv_concat}, {conv_dim}, {nicolai_layers},
+    # {num_neighbors_res}, {num_neighbors_ups}, {latent_dim}, {kernel_size_lr}, {kernel_size_hr}
+    # If omitted, a stage-specific default pattern is used from utils.build_save_dir.
+    save_dir_pattern: "{method}/super/{subfolder}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_layer-shr-{layer_shrinkage}_norm-out-{norm_method_output}{save_name}/"
 
 # -------------------------
 # Data loading
@@ -62,16 +69,6 @@ data:
         norm_method_input: "normalise_scalar"
         norm_method_output: "uniform" # or: "normalise_scalar", "normalise_pw", "none"
         fft: false
-        use_precomputed_hr: false
-        normalized_hr_root: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
-        normalized_hr_pattern: "{root}/{folder}/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid{file_suffix}{norm_suffix}.nc"
-        normalized_hr_default_suffix: ""
-        normalized_hr_filter_outliers: false
-        normalized_hr_suffix_by_var:
-            pr: "_subsample-v2-{precip_zeros}"
-            tas: "_subsample-v2"
-            sfcWind: "_subsample-v2"
-            rsds: "_subsample-v2"
 
         sqrt_transform_in:
             pr: false

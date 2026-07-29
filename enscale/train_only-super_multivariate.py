@@ -41,7 +41,7 @@ if __name__ == '__main__':
         subfolder = f"lr{cfg.data.kernel_size_lr}_hr{cfg.data.kernel_size_hr}"
     
     # Build save directory path using helper function
-    save_dir = build_save_dir(cfg, variables_str, subfolder)
+    save_dir = build_save_dir(cfg, variables_str, subfolder=subfolder, stage="super")
     make_folder(save_dir)
     write_config_to_file(cfg, save_dir)
     
@@ -82,6 +82,7 @@ if __name__ == '__main__':
     elif cfg.general.server == "euler":
         root = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
     gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root)
+    encoding_scheme = get_ensemble_encoding_scheme(cfg)
     
     #### load data
     train_loader, test_loader_in = get_data(cfg, test_size=0.1, shuffle=True)
@@ -130,7 +131,14 @@ if __name__ == '__main__':
         val_dim = None
         n_channels = xc_tr_eval.shape[1]
         if cfg.model.one_hot_in_super:
-            one_hot_dim = 7
+            if encoding_scheme == "gcm":
+                one_hot_dim = len(gcm_dict)
+            elif encoding_scheme == "rcm":
+                one_hot_dim = len(rcm_dict)
+            elif encoding_scheme == "gcm+rcm":
+                one_hot_dim = len(gcm_dict) + len(rcm_dict)
+            else:
+                one_hot_dim = 0
             interm_dim += one_hot_dim
         else:
             one_hot_dim = 0
@@ -163,11 +171,18 @@ if __name__ == '__main__':
             model = Generator2x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, image_size=128//cfg.data.kernel_size_lr).to(device)
         elif cfg.model.nicolai_layers:
             if cfg.model.one_hot_in_super:
-                num_classes = 8
+                if encoding_scheme == "gcm":
+                    num_classes = len(gcm_dict)
+                elif encoding_scheme == "rcm":
+                    num_classes = len(rcm_dict)
+                elif encoding_scheme == "gcm+rcm":
+                    num_classes = len(gcm_list)
+                else:
+                    num_classes = 1
                 if cfg.model.one_hot_only_in_ups:
                     num_classes_resid = 1
                 else:
-                    num_classes_resid = 8
+                    num_classes_resid = num_classes
             else:
                 num_classes = 1
                 num_classes_resid = 1
@@ -251,8 +266,21 @@ if __name__ == '__main__':
                 
             if cfg.model.nicolai_layers:
                 if cfg.model.one_hot_in_super:
-                    cls_ids = torch.from_numpy(
-                        get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(xc.device)
+                    if one_hot_dim <= 0 or encoding_scheme is None:
+                        cls_ids = None
+                    elif encoding_scheme in {"gcm", "rcm"}:
+                        cls_ids = torch.argmax(x[:, -one_hot_dim:], dim=1)
+                    else:
+                        cls_ids = torch.from_numpy(
+                            get_run_index_from_onehot(
+                                x[:, -one_hot_dim:],
+                                gcm_dict=gcm_dict,
+                                rcm_dict=rcm_dict,
+                                rcm_list=rcm_list,
+                                gcm_list=gcm_list,
+                                mode="joint",
+                            )
+                        ).to(xc.device)
                     #x[:, -one_hot_dim:]
                 else:
                     cls_ids = None
@@ -404,9 +432,21 @@ if __name__ == '__main__':
                             
                         if cfg.model.nicolai_layers:
                             if cfg.model.one_hot_in_super:
-                                cls_ids = torch.from_numpy(
-                                    get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
-                                ).to(xc_te.device)
+                                if one_hot_dim <= 0 or encoding_scheme is None:
+                                    cls_ids = None
+                                elif encoding_scheme in {"gcm", "rcm"}:
+                                    cls_ids = torch.argmax(x_te[:, -one_hot_dim:], dim=1)
+                                else:
+                                    cls_ids = torch.from_numpy(
+                                        get_run_index_from_onehot(
+                                            x_te[:, -one_hot_dim:],
+                                            gcm_dict=gcm_dict,
+                                            rcm_dict=rcm_dict,
+                                            rcm_list=rcm_list,
+                                            gcm_list=gcm_list,
+                                            mode="joint",
+                                        )
+                                    ).to(xc_te.device)
                             else:
                                 cls_ids = None
                         

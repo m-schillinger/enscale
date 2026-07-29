@@ -56,19 +56,29 @@ data:
 
     ensemble_encoding:
         enabled: true
-        scheme: gcm+rcm
+        scheme: rcm
 
     preprocessing:
         norm_method_input: "normalise_scalar"
         norm_method_output: "uniform" # or: "normalise_scalar", "normalise_pw", "none"
         fft: false
-        use_precomputed_hr: false
+        use_precomputed_hr: true
         normalized_hr_root: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
         normalized_hr_pattern: "{root}/{folder}/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid{file_suffix}{norm_suffix}.nc"
+        normalized_hr_modes:
+            train:
+                folder: "train_norm_unif"
+                file_suffix: "_train-period"
+            test_interpolation:
+                folder: "test_norm_unif/interpolation"
+                file_suffix: "_2030-2039"
+            test_extrapolation:
+                folder: "test_norm_unif/extrapolation"
+                file_suffix: "_2090-2099"
         normalized_hr_default_suffix: ""
         normalized_hr_filter_outliers: false
         normalized_hr_suffix_by_var:
-            pr: "_subsample-v2-{precip_zeros}"
+            pr: "_subsample-v2"
             tas: "_subsample-v2"
             sfcWind: "_subsample-v2"
             rsds: "_subsample-v2"

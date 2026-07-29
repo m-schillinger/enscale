@@ -734,10 +734,8 @@ if __name__ == '__main__':
             
             elif not counterfactuals and not args.save_quantiles:
                 if mode == "test_interpolation":
-                    torch.save(samples_norm, save_dir_samples + f'idx{k}_inter{suffix}_unif.pt')
                     torch.save(samples_raw, save_dir_samples + f'idx{k}_inter{suffix}.pt')
                 elif mode == "test_extrapolation":
-                    torch.save(samples_norm, save_dir_samples + f'idx{k}_extra{suffix}_unif.pt')
                     torch.save(samples_raw, save_dir_samples + f'idx{k}_extra{suffix}.pt')
             
             elif counterfactuals:

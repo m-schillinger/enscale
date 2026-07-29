@@ -12,6 +12,8 @@ from load_config import load_config
 from utils import (
     make_folder,
     write_config_to_file,
+    build_save_dir,
+    get_ensemble_encoding_scheme,
     get_rcm_gcm_combinations,
     get_run_index_from_onehot,
     get_mode_from_kernel_size,
@@ -28,21 +30,6 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     return parser.parse_args()
-
-
-def build_save_dir(cfg, variables_str, subfolder):
-    if cfg.general.server == "ada":
-        return (
-            f"results/super_temporal/{subfolder}/var-{variables_str}/"
-            f"loc-specific-layers_norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        )
-    if cfg.general.server == "euler":
-        return (
-            "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/"
-            f"super_temporal/{subfolder}/var-{variables_str}/"
-            f"loc-specific-layers_norm-out-{cfg.data.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        )
-    raise ValueError(f"Unknown server: {cfg.general.server}")
 
 
 def open_log_file(path, resume_epoch):
@@ -63,7 +50,8 @@ def infer_cls_ids(x, one_hot_dim, cfg, gcm_list, rcm_list, gcm_dict, rcm_dict, r
     if one_hot_dim == 0:
         return None
     one_hot = x[:, -one_hot_dim:]
-    if cfg.data.ignore_one_hot_gcm:
+    scheme = get_ensemble_encoding_scheme(cfg)
+    if scheme in {"gcm", "rcm"}:
         return torch.argmax(one_hot, dim=1)
     cls_ids_np = get_run_index_from_onehot(
         one_hot,
@@ -72,6 +60,7 @@ def infer_cls_ids(x, one_hot_dim, cfg, gcm_list, rcm_list, gcm_dict, rcm_dict, r
         gcm_list=gcm_list,
         rcm_list=rcm_list,
         root=root,
+        mode="joint",
     )
     return torch.from_numpy(cls_ids_np).to(x.device)
 
@@ -135,7 +124,7 @@ if __name__ == "__main__":
 
     variables_str = "_".join(cfg.data.variables)
     subfolder = get_subfolder(cfg)
-    save_dir = build_save_dir(cfg, variables_str, subfolder)
+    save_dir = build_save_dir(cfg, variables_str, subfolder=subfolder, stage="super_temporal")
     make_folder(save_dir)
     write_config_to_file(cfg, save_dir)
 
@@ -173,14 +162,24 @@ if __name__ == "__main__":
     xc_te_eval = xc_te_eval[:cfg.general.n_visual].to(device)
     y_te_eval = y_te_eval[:cfg.general.n_visual].to(device)
 
-    if cfg.model.one_hot_in_super and not cfg.data.ignore_one_hot_gcm:
-        one_hot_dim = 7
-        num_classes = 8
-        num_classes_resid = 1 if cfg.model.one_hot_only_in_ups else 8
-    elif cfg.model.one_hot_in_super and cfg.data.ignore_one_hot_gcm:
-        one_hot_dim = 4
-        num_classes = 4
-        num_classes_resid = 1 if cfg.model.one_hot_only_in_ups else 4
+    if cfg.model.one_hot_in_super:
+        scheme = get_ensemble_encoding_scheme(cfg)
+        if scheme is None:
+            one_hot_dim = 0
+            num_classes = 1
+            num_classes_resid = 1
+        elif scheme == "gcm":
+            one_hot_dim = len(gcm_dict)
+            num_classes = len(gcm_dict)
+            num_classes_resid = 1 if cfg.model.one_hot_only_in_ups else len(gcm_dict)
+        elif scheme == "rcm":
+            one_hot_dim = len(rcm_dict)
+            num_classes = len(rcm_dict)
+            num_classes_resid = 1 if cfg.model.one_hot_only_in_ups else len(rcm_dict)
+        else:
+            one_hot_dim = len(gcm_dict) + len(rcm_dict)
+            num_classes = len(gcm_list)
+            num_classes_resid = 1 if cfg.model.one_hot_only_in_ups else len(gcm_list)
     else:
         one_hot_dim = 0
         num_classes = 1
