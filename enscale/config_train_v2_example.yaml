@@ -20,7 +20,8 @@ data:
     hr_pattern: "{root}/{folder}/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid{file_suffix}{var_suffix}.nc"
 
   train:
-    folder: "train"
+    folder_lr: "train"
+    folder_hr: "train_norm_unif"
     file_suffix: "_train-period"
 
   validation:
@@ -49,6 +50,7 @@ data:
     normal_transform: true
     logit_transform: false
     clip_quantile: null
+    flip_latitude: true
     sep_mean_std: false
     use_pre_normalized_lr: false
     use_pre_normalized_hr: true
@@ -129,5 +131,5 @@ training:
   alpha: 1.0
   burn_in: 0
   save_model_every: 50
-  num_workers: 1
+  num_workers: 0
 

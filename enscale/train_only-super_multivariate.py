@@ -8,7 +8,7 @@ from loss_func import energy_loss_two_sample, avg_constraint_per_var, energy_los
 
 from data_v2 import get_data_v2
 import argparse
-from enscale.archive.load_config import load_config
+import load_config_v2
 from utils import *
 import sys
 import time
@@ -22,7 +22,7 @@ if __name__ == '__main__':
         return parser.parse_args()
     
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config_v2.load_config_v2(args.config)
     
     random.seed(cfg.general.seed)
     torch.manual_seed(cfg.general.seed)
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     encoding_scheme = get_ensemble_encoding_scheme(cfg)
     
     #### load data
-    train_loader, test_loader_in = get_data_v2(cfg, test_size=0.1, shuffle=True)
+    train_loader, test_loader_in = get_data_v2(cfg, validation_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))
@@ -149,19 +149,19 @@ if __name__ == '__main__':
             assert len(cfg.data.variables) == 1
         
         if cfg.model.conv and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
-            assert not args.conv_concat
+            assert not cfg.model.conv_concat
             print("building 16x conv model")
             assert not cfg.model.one_hot_in_super # not implemented yet
             model = Generator16x(conv_dim=cfg.model.conv_dim, n_channels=n_channels).to(device)
         elif cfg.model.conv and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
-            assert not args.conv_concat
+            assert not cfg.model.conv_concat
             print("building 4x conv model")
             model = Generator4x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
                                 image_size=128//cfg.data.kernel_size_lr).to(device)
         elif cfg.model.conv_concat and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
             raise NotImplementedError("Concatenating noise for kernel size 16 not implemented yet")
         elif cfg.model.conv_concat and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
-            assert not args.conv
+            assert not cfg.model.conv
             print("building 4x conv model")
             model = Generator4xConcat(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
                                       num_noise_channels=cfg.model.num_noise_channels,
@@ -284,6 +284,7 @@ if __name__ == '__main__':
                     #x[:, -one_hot_dim:]
                 else:
                     cls_ids = None
+            
             if cfg.model.nicolai_layers and not cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                 gen1, y_interm = model(xc, cls_ids=cls_ids, return_latent=True)
                 gen2, y_interm2 = model(xc, cls_ids=cls_ids, return_latent=True)
