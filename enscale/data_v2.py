@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
 from config_v2 import ConfigV2, DataConfigV2, ModeConfigV2
-from utils import day_of_year_vectorized, get_rcm_gcm_combinations, is_leap_year, normalise
+from utils import correct_units, day_of_year_vectorized, get_rcm_gcm_combinations, is_leap_year, normalise
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,14 @@ class CordexReaderV2(DataReaderV2):
             return mode_cfg.hr_pattern or self.cfg_data.cordex.hr_pattern
         raise ValueError(f"Unknown kind: {kind}")
 
+    @staticmethod
+    def _folder_for_kind(mode_cfg: ModeConfigV2, kind: str) -> str:
+        if kind == "lr":
+            return mode_cfg.folder_lr if mode_cfg.folder_lr is not None else mode_cfg.folder
+        if kind == "hr":
+            return mode_cfg.folder_hr if mode_cfg.folder_hr is not None else mode_cfg.folder
+        raise ValueError(f"Unknown kind: {kind}")
+
     def _path(self, var: str, run: RunSpecV2, kind: str, split: str, submode: Optional[str] = None) -> str:
         mode_cfg = self.resolver.mode(split, submode)
         template = self._template(kind, mode_cfg)
@@ -85,7 +93,7 @@ class CordexReaderV2(DataReaderV2):
 
         context = {
             "root": self.cfg_data.cordex.root,
-            "folder": mode_cfg.folder,
+            "folder": self._folder_for_kind(mode_cfg, kind),
             "var": var,
             "gcm": run.gcm,
             "rcm": run.rcm,
@@ -117,7 +125,7 @@ class CordexReaderV2(DataReaderV2):
 
         context = {
             "root": self.cfg_data.cordex.root,
-            "folder": mode_cfg.folder,
+            "folder": self._folder_for_kind(mode_cfg, "lr"),
             "var": self.cfg_data.variables_lr[0] if self.cfg_data.variables_lr else self.cfg_data.variables[0],
             "gcm": run.gcm,
             "rcm": run.rcm,
@@ -147,6 +155,14 @@ class PatternReaderV2(DataReaderV2):
             return mode_cfg.hr_pattern or self.cfg_data.pattern.hr_pattern
         raise ValueError(f"Unknown kind: {kind}")
 
+    @staticmethod
+    def _folder_for_kind(mode_cfg: ModeConfigV2, kind: str) -> str:
+        if kind == "lr":
+            return mode_cfg.folder_lr if mode_cfg.folder_lr is not None else mode_cfg.folder
+        if kind == "hr":
+            return mode_cfg.folder_hr if mode_cfg.folder_hr is not None else mode_cfg.folder
+        raise ValueError(f"Unknown kind: {kind}")
+
     def _resolve_paths(self, var: str, run: RunSpecV2, kind: str, split: str, submode: Optional[str]) -> List[str]:
         mode_cfg = self.resolver.mode(split, submode)
         template = self._template(kind, mode_cfg)
@@ -155,7 +171,7 @@ class PatternReaderV2(DataReaderV2):
 
         context = {
             "root": self.cfg_data.data_dir,
-            "folder": mode_cfg.folder,
+            "folder": self._folder_for_kind(mode_cfg, kind),
             "var": var,
             "gcm": run.gcm or "",
             "rcm": run.rcm or "",
@@ -276,7 +292,15 @@ class PreprocessorV2:
     def __init__(self, cfg_preproc):
         self.cfg = cfg_preproc
 
+    def _maybe_flip_latitude(self, x: torch.Tensor):
+        if bool(self.cfg.flip_latitude) and x.ndim >= 3:
+            return torch.flip(x, dims=[1])
+        return x
+
     def process_lr(self, x: torch.Tensor, var: str):
+        x = self._maybe_flip_latitude(x)
+        if not bool(self.cfg.use_pre_normalized_lr):
+            x = correct_units(x, var)
         return normalise(
             x,
             var=var,
@@ -286,6 +310,9 @@ class PreprocessorV2:
         )
 
     def process_hr(self, x: torch.Tensor, var: str):
+        x = self._maybe_flip_latitude(x)
+        if not bool(self.cfg.use_pre_normalized_hr):
+            x = correct_units(x, var)
         return normalise(
             x,
             var=var,

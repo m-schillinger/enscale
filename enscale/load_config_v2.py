@@ -48,8 +48,37 @@ def _load_v2_doc(path: str) -> Dict[str, Any]:
     return _load_yaml_with_inheritance(path)
 
 
+def _resolve_inference_stage_paths(doc: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    out = deepcopy(doc)
+    inference = out.get("inference")
+    if not isinstance(inference, dict):
+        return out
+
+    stages = inference.get("stages")
+    if not isinstance(stages, list):
+        return out
+
+    base_dir = os.path.dirname(os.path.abspath(config_path))
+    resolved_stages = []
+    for idx, stage in enumerate(stages):
+        if not isinstance(stage, dict):
+            raise TypeError(f"inference.stages[{idx}] must be a mapping")
+        stage_out = deepcopy(stage)
+        config_ref = stage_out.get("config_path")
+        if config_ref is not None:
+            config_ref = str(config_ref)
+            if not os.path.isabs(config_ref):
+                config_ref = os.path.abspath(os.path.join(base_dir, config_ref))
+            stage_out["config_path"] = config_ref
+        resolved_stages.append(stage_out)
+
+    inference["stages"] = resolved_stages
+    out["inference"] = inference
+    return out
+
+
 def load_config_v2(path: str) -> ConfigV2:
-    d = _load_v2_doc(path)
+    d = _resolve_inference_stage_paths(_load_v2_doc(path), path)
 
     cfg = ConfigV2()
 
@@ -74,7 +103,7 @@ def load_config_v2(path: str) -> ConfigV2:
 
 def load_train_and_inference_config_v2(train_path: str, inference_path: str) -> ConfigV2:
     train_doc = _load_v2_doc(train_path)
-    inference_doc = _load_v2_doc(inference_path)
+    inference_doc = _resolve_inference_stage_paths(_load_v2_doc(inference_path), inference_path)
 
     merged = _deep_merge(train_doc, inference_doc)
 

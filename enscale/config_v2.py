@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
-from enscale.archive.config import ModelConfig, LossConfig, SparseLocalLayerConfig, TrainingConfig
-
 
 @dataclass
 class GeneralConfigV2:
@@ -31,9 +29,174 @@ class GeneralConfigV2:
             self.save_dir_pattern = str(self.save_dir_pattern)
 
 
+# -------------------------
+# Model architecture
+# -------------------------
+
+@dataclass
+class ModelConfig:
+    method: str = "eng_unet"
+    conv: bool = False
+    nicolai_layers: bool = False
+    conv_concat: bool = False
+    num_noise_channels: int = 1
+    conv_dim: int = 16
+    hidden_dim: int = 1000
+    layer_shrinkage: int = 16
+    noise_dim: int = 100
+    dropout: bool = False
+    noise_std: float = 1.0
+    out_act: Optional[str] = None
+    num_layer: int = 6
+    preproc_layer: bool = False
+    preproc_dim: int = 20
+    mlp: bool = True
+    bn: bool = False
+    one_hot_in_super: bool = False
+    one_hot_only_in_ups: bool = False
+    add_x_in_super: bool = False
+    split_coarse_model: bool = False
+
+    def __post_init__(self):
+        # strings
+        self.method = str(self.method)
+        if self.out_act is not None:
+            self.out_act = str(self.out_act)
+        # bools
+        self.conv = bool(self.conv)
+        self.nicolai_layers = bool(self.nicolai_layers)
+        self.conv_concat = bool(self.conv_concat)
+        self.dropout = bool(self.dropout)
+        self.preproc_layer = bool(self.preproc_layer)
+        self.mlp = bool(self.mlp)
+        self.bn = bool(self.bn)
+        self.one_hot_in_super = bool(self.one_hot_in_super)
+        self.one_hot_only_in_ups = bool(self.one_hot_only_in_ups)
+        self.add_x_in_super = bool(self.add_x_in_super)
+        self.split_coarse_model = bool(self.split_coarse_model)
+        # ints
+        self.num_noise_channels = int(self.num_noise_channels)
+        self.conv_dim = int(self.conv_dim)
+        self.hidden_dim = int(self.hidden_dim)
+        self.layer_shrinkage = int(self.layer_shrinkage)
+        self.noise_dim = int(self.noise_dim)
+        self.num_layer = int(self.num_layer)
+        self.preproc_dim = int(self.preproc_dim)
+        # floats
+        self.noise_std = float(self.noise_std)
+
+
+# -------------------------
+# Losses / constraints
+# -------------------------
+
+@dataclass
+class LossConfig:
+    avg_constraint: bool = False
+    max_loss: bool = False
+    norm_loss: bool = False
+    norm_loss_loc: bool = False
+    lambda_norm_loss_loc: float = 1.0
+    norm_loss_batch: bool = False
+    agg_norm_loss: str = "mean"
+    norm_loss_per_var: bool = False
+    p_norm_loss_loc: Optional[List[float]] = field(default_factory=lambda: [4.0])
+    p_norm_loss_batch: Optional[List[float]] = field(default_factory=lambda: [4.0])
+    lambda_coarse: float = 0.5
+    beta: float = 1.0
+    beta_norm_loss: float = 1.0
+    patched_loss: bool = False
+    patch_size: int = 8
+    calc_raw_loss: bool = False
+
+    def __post_init__(self):
+            # floats
+            self.lambda_norm_loss_loc = float(self.lambda_norm_loss_loc)
+            self.lambda_coarse = float(self.lambda_coarse)
+            self.beta = float(self.beta)
+            self.beta_norm_loss = float(self.beta_norm_loss)
+            self.patch_size = int(self.patch_size)
+
+            # optional lists
+            self.p_norm_loss_loc = self._coerce_optional_float_list(self.p_norm_loss_loc)
+            self.p_norm_loss_batch = self._coerce_optional_float_list(self.p_norm_loss_batch)
+
+    @staticmethod
+    def _coerce_optional_float_list(val):
+        if val is None:
+            return None
+        if isinstance(val, str) and val.lower() == "none":
+            return None
+        if isinstance(val, (int, float)):
+            return [float(val)]
+        if isinstance(val, list):
+            return [float(v) for v in val]
+        raise TypeError(f"Invalid type for optional float list: {type(val)}")
+
+# -------------------------
+# Location-specific layers
+# -------------------------
+
+@dataclass
+class SparseLocalLayerConfig:
+    num_neighbors_res: int = 25
+    num_neighbors_ups: int = 9
+    latent_dim: int = 12
+    mlp_depth: int = 3
+    noise_dim_mlp: int = 0
+    double_linear: bool = False
+    add_intermediate_loss: bool = False
+    add_mse_loss: bool = False
+    lambda_mse_loss: float = 1.0
+    not_split_residuals: bool = False
+
+    def __post_init__(self):
+        # ints
+        self.num_neighbors_res = int(self.num_neighbors_res)
+        self.num_neighbors_ups = int(self.num_neighbors_ups)
+        self.latent_dim = int(self.latent_dim)
+        self.mlp_depth = int(self.mlp_depth)
+        self.noise_dim_mlp = int(self.noise_dim_mlp)
+        # bools
+        self.double_linear = bool(self.double_linear)
+        self.add_intermediate_loss = bool(self.add_intermediate_loss)
+        self.add_mse_loss = bool(self.add_mse_loss)
+        self.not_split_residuals = bool(self.not_split_residuals)
+        # floats
+        self.lambda_mse_loss = float(self.lambda_mse_loss)
+
+
+# -------------------------
+# Training
+# -------------------------
+
+@dataclass
+class TrainingConfig:
+    batch_size: int = 512
+    num_epochs: int = 500
+    lr: float = 1e-4
+    weight_decay: float = 0.0
+    alpha: float = 1.0
+    burn_in: int = 0
+    save_model_every: int = 50
+    num_workers: int = 1
+
+    def __post_init__(self):
+        self.batch_size = int(self.batch_size)
+        self.num_epochs = int(self.num_epochs)
+        self.lr = float(self.lr)
+        self.weight_decay = float(self.weight_decay)
+        self.alpha = float(self.alpha)
+        self.burn_in = int(self.burn_in)
+        self.save_model_every = int(self.save_model_every)
+        self.num_workers = int(self.num_workers)
+
+
 @dataclass
 class ModeConfigV2:
     folder: str = ""
+    folder_lr: Optional[str] = None
+    folder_hr: Optional[str] = None
     file_suffix: str = ""
     lr_pattern: Optional[str] = None
     hr_pattern: Optional[str] = None
@@ -42,6 +205,10 @@ class ModeConfigV2:
 
     def __post_init__(self):
         self.folder = str(self.folder)
+        if self.folder_lr is not None:
+            self.folder_lr = str(self.folder_lr)
+        if self.folder_hr is not None:
+            self.folder_hr = str(self.folder_hr)
         self.file_suffix = str(self.file_suffix)
         if self.lr_pattern is not None:
             self.lr_pattern = str(self.lr_pattern)
@@ -79,6 +246,7 @@ class DataPreprocessingV2:
     normal_transform: bool = False
     logit_transform: bool = False
     clip_quantile: Optional[float] = None
+    flip_latitude: bool = True
     sqrt_transform_out: Dict[str, bool] = field(default_factory=dict)
     sqrt_transform_in: Dict[str, bool] = field(default_factory=dict)
     sep_mean_std: bool = False
@@ -109,6 +277,7 @@ class DataPreprocessingV2:
         self.fft = bool(self.fft)
         self.normal_transform = bool(self.normal_transform)
         self.logit_transform = bool(self.logit_transform)
+        self.flip_latitude = bool(self.flip_latitude)
         self.sep_mean_std = bool(self.sep_mean_std)
         self.use_pre_normalized_lr = bool(self.use_pre_normalized_lr)
         self.use_pre_normalized_hr = bool(self.use_pre_normalized_hr)
@@ -350,6 +519,70 @@ class DataConfigV2:
 @dataclass
 class InferenceConfigV2:
     @dataclass
+    class StageConfig:
+        # Friendly label for logging / manifests.
+        name: str = ""
+        # Train config used to instantiate this stage model.
+        config_path: str = ""
+        # Which stage path logic to use for save-dir resolution.
+        stage: str = "super"  # coarse | super | super_temporal | coarse_temporal
+        # Optional subfolder override when stage == super/super_temporal.
+        subfolder: Optional[str] = None
+
+        # Checkpoint selection for this stage.
+        checkpoint_source: str = "train_output"  # train_output | pretrained
+        train_run_dir: Optional[str] = None
+        checkpoint_path: Optional[str] = None
+        epoch: Optional[int] = None
+        checkpoint_file: Optional[str] = None
+
+        # HierarchicalWrapper behavior for this stage.
+        vars_as_channels: bool = False
+        use_one_hot: bool = False
+        one_hot_option: str = "concat"  # concat | argument
+        noise_dim: Optional[int] = None
+
+        def __post_init__(self):
+            self.name = str(self.name)
+            self.config_path = str(self.config_path)
+            self.stage = str(self.stage)
+            if self.subfolder is not None:
+                self.subfolder = str(self.subfolder)
+
+            self.checkpoint_source = str(self.checkpoint_source)
+            if self.checkpoint_source not in {"train_output", "pretrained"}:
+                raise ValueError("stage.checkpoint_source must be one of: train_output, pretrained")
+
+            if self.train_run_dir is not None:
+                self.train_run_dir = str(self.train_run_dir)
+            if self.checkpoint_path is not None:
+                self.checkpoint_path = str(self.checkpoint_path)
+            if self.epoch is not None:
+                self.epoch = int(self.epoch)
+            if self.checkpoint_file is not None:
+                self.checkpoint_file = str(self.checkpoint_file)
+
+            self.vars_as_channels = bool(self.vars_as_channels)
+            self.use_one_hot = bool(self.use_one_hot)
+            self.one_hot_option = str(self.one_hot_option)
+            if self.one_hot_option not in {"concat", "argument"}:
+                raise ValueError("stage.one_hot_option must be one of: concat, argument")
+
+            if self.noise_dim is not None:
+                self.noise_dim = int(self.noise_dim)
+
+            if self.checkpoint_source == "pretrained" and not self.checkpoint_path:
+                raise ValueError("stage.checkpoint_path must be provided when stage.checkpoint_source='pretrained'")
+
+            if self.checkpoint_source == "train_output":
+                if self.checkpoint_path is not None:
+                    raise ValueError("stage.checkpoint_path is only valid when stage.checkpoint_source='pretrained'")
+                if self.checkpoint_file is None and self.epoch is None:
+                    raise ValueError(
+                        "Either stage.epoch or stage.checkpoint_file must be provided when stage.checkpoint_source='train_output'"
+                    )
+
+    @dataclass
     class DataModes:
         test: ModeGroupConfigV2 = field(default_factory=ModeGroupConfigV2)
         inference: ModeGroupConfigV2 = field(default_factory=ModeGroupConfigV2)
@@ -397,6 +630,12 @@ class InferenceConfigV2:
     batch_size: Optional[int] = None
     data_modes: DataModes = field(default_factory=DataModes)
 
+    # Hierarchical inference orchestration.
+    hierarchical: bool = False
+    stages: List[StageConfig] = field(default_factory=list)
+    output_subdir: str = "hierarchical_eval_v2"
+    sample_size: int = 9
+
     def __post_init__(self):
         if self.checkpoint_source is not None:
             self.checkpoint_source = str(self.checkpoint_source)
@@ -422,6 +661,22 @@ class InferenceConfigV2:
             self.data_modes = InferenceConfigV2.DataModes(**self.data_modes)
         if self.data_modes is None:
             self.data_modes = InferenceConfigV2.DataModes()
+
+        self.hierarchical = bool(self.hierarchical)
+        if isinstance(self.stages, list):
+            self.stages = [
+                s if isinstance(s, InferenceConfigV2.StageConfig) else InferenceConfigV2.StageConfig(**(s or {}))
+                for s in self.stages
+            ]
+        else:
+            raise ValueError("inference.stages must be a list")
+        self.output_subdir = str(self.output_subdir)
+        self.sample_size = int(self.sample_size)
+        if self.sample_size < 1:
+            raise ValueError("inference.sample_size must be >= 1")
+
+        if self.hierarchical and not self.stages:
+            raise ValueError("inference.stages must be provided when inference.hierarchical=true")
 
         if self.checkpoint_source == "pretrained" and not self.pretrained_checkpoints:
             raise ValueError("pretrained_checkpoints must be provided when checkpoint_source='pretrained'")

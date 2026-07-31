@@ -8,7 +8,7 @@ from modules import StoUNet, LinearModel, MultipleStoUNetWrapper, MeanResidualWr
 from loss_func import energy_loss_two_sample, norm_loss_multivariate_summed
 
 import argparse
-from enscale.archive.load_config import load_config
+import load_config_v2
 from utils import *
 import sys
 import pdb
@@ -39,7 +39,7 @@ if __name__ == '__main__':
         return parser.parse_args()
 
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config_v2.load_config_v2(args.config)
     
     random.seed(cfg.general.seed)
     torch.manual_seed(cfg.general.seed)
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     else:
         return_timepair = False
     
-    train_loader, test_loader_in = get_data_v2(cfg, test_size=0.1, shuffle=True)
+    train_loader, test_loader_in = get_data_v2(cfg, validation_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     if cfg.model.method == "eng_temporal":

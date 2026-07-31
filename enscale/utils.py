@@ -792,6 +792,14 @@ def load_norm_stats_for_variables(cfg, mode, variables, device=None):
     
     return norm_stats_dict
 
+
+def get_norm_method_for_mode(cfg, mode):
+    if mode == "lr":
+        return cfg.norm_method_input
+    if mode in {"hr", "hr_avg", "hr_avg_2", "hr_avg_4", "hr_avg_8", "hr_avg_32", "hr_avg_64"}:
+        return cfg.norm_method_output
+    raise ValueError(f"Unknown mode: {mode}")
+
 def ecdf_normalise(x, norm_stats, len_full_data=int(3e4)): # TO DO: need to make more flexible
     data_norm = torch.zeros_like(x)
     probs = torch.linspace(1, len_full_data, len_full_data) / (len_full_data + 1) 
@@ -810,6 +818,8 @@ def normalise(
     norm_stats=None,
     skip_normalization: bool = False):
 
+    norm_method = get_norm_method_for_mode(cfg, mode)
+
     if skip_normalization:
         data_norm = data
     else:
@@ -817,11 +827,9 @@ def normalise(
         if mode == "lr":
             data = apply_variable_transform(data, var, cfg.sqrt_transform_in)
             suffix = "_sqrt" if cfg.sqrt_transform_in.get(var, False) else ""
-            norm_method = cfg.norm_method_input
         elif mode == "hr":
             data = apply_variable_transform(data, var, cfg.sqrt_transform_out)
             suffix = "_sqrt" if cfg.sqrt_transform_out.get(var, False) else ""
-            norm_method = cfg.norm_method_output
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
@@ -862,7 +870,7 @@ def normalise(
     # 4. Post transforms
     if cfg.post_transform.logit:
         data_norm = torch.logit(data_norm)
-    if cfg.post_transform.gaussian:
+    if cfg.post_transform.gaussian and norm_method == "uniform":
         data_np = data_norm.detach().cpu().numpy()
         data_norm = torch.from_numpy(scipy.stats.norm.ppf(data_np)).to(data_norm.dtype).to(data_norm.device)
 
@@ -891,12 +899,14 @@ def unnormalise(
     Returns:
         Unnormalised data reshaped to [batch, s1, s2]
     """
+    norm_method = get_norm_method_for_mode(cfg, mode)
+
     # 1. Reverse post transforms
     data_unnorm = data_norm.clone()
     
     if cfg.post_transform.logit:
         data_unnorm = torch.sigmoid(data_unnorm)
-    if cfg.post_transform.gaussian:
+    if cfg.post_transform.gaussian and norm_method == "uniform":
         data_np = data_unnorm.detach().cpu().numpy()
         data_unnorm = torch.from_numpy(scipy.stats.norm.cdf(data_np)).to(data_unnorm.dtype).to(data_unnorm.device)
     # Only apply unnormalisation for full-resolution HR outputs
@@ -912,14 +922,6 @@ def unnormalise(
         sqrt_cfg = cfg.sqrt_transform_out if hasattr(cfg, 'sqrt_transform_out') else {}
         data_reshaped = reverse_variable_transform(data, var, sqrt_cfg)
         return data_reshaped
-
-    # mode == 'hr' -> perform normal unnormalisation using configured methods
-    if mode == "hr":
-        norm_method = cfg.norm_method_output
-    elif mode == "lr":
-        norm_method = cfg.norm_method_input
-    else:
-        norm_method = None
 
     # 2. Unnormalisation for HR
     
