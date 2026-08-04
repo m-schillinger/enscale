@@ -1,0 +1,27 @@
+data:
+  source: normalized   # raw | normalized
+
+  preprocessing:
+    correct_units: false      # already done offline
+    apply_normalisation: false
+    apply_logit: true
+    apply_gaussian: false
+
+
+data:
+  type: cordex_ensemble
+  source: raw
+
+  cordex:
+    root: /data/cordex
+    lr_pattern: "{root}/train/{var}_day_{gcm}_{variant}_rcp85_EUROPE_g025_train-period.nc"
+    hr_pattern: "{root}/train/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid_train-period.nc"
+
+data:
+  type: cordex_ensemble
+  source: normalized
+
+  cordex:
+    root: /data/cordex_norm
+    lr_pattern: "{root}/train/{var}_{gcm}_{variant}_g025_norm.nc"
+    hr_pattern: "{root}/train/{var}_EUR-11_{rcm}_{gcm}_{variant}_norm.nc"

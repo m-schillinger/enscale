@@ -1,0 +1,162 @@
+
+
+# -------------------------
+# General / bookkeeping
+# -------------------------
+
+general:
+    save_name: "_TEST-new-data-config"
+    resume_epoch: 0
+    server: "ada"
+    save_dir_root_local: "results"
+    save_dir_root_server: "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results"
+    save_dir_pattern: "{method}/super/{subfolder}/var-{variables}/{save_name}/"
+
+# -------------------------
+# Data loading
+# -------------------------
+
+data:
+    variables: ["tas", "pr", "sfcWind", "rsds"]
+    variables_lr: ["pr"]
+    type: cordex_ensemble # cordex_ensemble or single_pair
+    kernel_size_lr: 16
+    kernel_size_hr: 8
+    precip_zeros: "constant"
+    data_dir: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
+    random_state: 42
+
+    cordex: # only used if type is 'cordex_ensemble'
+        root: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
+        # patterns must contain {root}, {folder}, {var}, {gcm}, {rcm}, {variant}, and {file_suffix}
+        lr_pattern: "{root}/{folder}/{var}_day_{gcm}_{variant}_rcp85_EUROPE_g025{file_suffix}.nc"
+        hr_pattern: "{root}/{folder}/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid{file_suffix}.nc"
+        modes:
+            train:
+                folder: "train"
+                file_suffix: "_train-period"
+            test_interpolation:
+                folder: "test/interpolation"
+                file_suffix: "_2030-2039"
+            test_extrapolation:
+                folder: "test/extrapolation"
+                file_suffix: "_2090-2099"
+
+    single_pair:
+        inputs:
+            file: pr.nc
+
+        targets:
+            file: pr_hr.nc
+
+    runs:
+        selection: first_n # or explicit
+        n_models: 1
+        indices: []  # only used if selection is 'explicit'
+
+    ensemble_encoding:
+        enabled: true
+        scheme: gcm+rcm
+
+    preprocessing:
+        norm_method_input: "normalise_scalar"
+        norm_method_output: "normalise_pw" # or: "normalise_scalar", "normalise_pw", "none"
+        fft: false
+
+        sqrt_transform_in:
+            pr: true
+            sfcWind: true
+
+        sqrt_transform_out:
+            pr: true
+            sfcWind: true
+
+        stats:
+            root: /r/scratch/groups/nm/downscaling/cordex-ALPS-allyear/norm_stats
+            pattern:
+                primitive: null
+                normalise_pw: "{mode}_norm_stats_pixelwise_{var}_train_ALL{suffix}.pt"
+                normalise_scalar: "{mode}_norm_stats_full-data_{var}_train_ALL{suffix}.pt"
+                uniform: "{mode}_norm_stats_ecdf_matrix_{var}_train_SUBSAMPLE{suffix}.pt"
+
+        post_transform:
+            logit: false
+            gaussian: false
+
+# -------------------------
+# Model architecture
+# -------------------------
+
+model:
+    method: "eng_2step"
+    conv: False
+    nicolai_layers: True
+    conv_concat: False
+    conv_dim: 16
+    hidden_dim: 12
+    layer_shrinkage: 16
+    noise_dim: 100
+    dropout: False
+    noise_std: 1.0
+    out_act: null
+    num_layer: 6
+    preproc_layer: False
+    preproc_dim: 20
+    mlp: True
+    bn: False
+    one_hot_in_super: True
+    one_hot_only_in_ups: True
+    add_x_in_super: False
+    split_coarse_model: False
+
+# -------------------------
+# Losses / constraints
+# -------------------------
+
+loss:
+    avg_constraint: False
+    max_loss: False
+    norm_loss: False
+    norm_loss_loc: False
+    lambda_norm_loss_loc: 1.0
+    norm_loss_batch: False
+    agg_norm_loss: "mean"
+    norm_loss_per_var: False
+    p_norm_loss_loc: null
+    p_norm_loss_batch: null
+    lambda_coarse: 0.5
+    beta: 1.0
+    beta_norm_loss: 1.0
+    patched_loss: False
+    patch_size: 8
+    calc_raw_loss: False
+
+# -------------------------
+# Location-specific layers
+# -------------------------
+
+sparse_layers:
+    num_neighbors_res: 25
+    num_neighbors_ups: 9
+    latent_dim: 12
+    mlp_depth: 2
+    noise_dim_mlp: 0
+    double_linear: False
+    add_intermediate_loss: False
+    add_mse_loss: False
+    lambda_mse_loss: 0
+    not_split_residuals: True
+
+# -------------------------
+# Training
+# -------------------------
+
+training:
+    batch_size: 512
+    num_epochs: 500
+    lr: 1e-4
+    weight_decay: 1e-3
+    alpha: 1.0
+    burn_in: 0
+    save_model_every: 50
+    num_workers: 1

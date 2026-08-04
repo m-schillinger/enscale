@@ -15,6 +15,9 @@ class GeneralConfig:
     server: str = "ada"
     save_name: str = ""
     resume_epoch: int = 0
+    save_dir_root_local: str = "results"
+    save_dir_root_server: str = ""
+    save_dir_pattern: Optional[str] = None
 
     def __post_init__(self):
         self.n_visual = int(self.n_visual)
@@ -24,6 +27,10 @@ class GeneralConfig:
         self.server = str(self.server)
         self.save_name = str(self.save_name)
         self.resume_epoch = int(self.resume_epoch)
+        self.save_dir_root_local = str(self.save_dir_root_local)
+        self.save_dir_root_server = str(self.save_dir_root_server)
+        if self.save_dir_pattern is not None:
+            self.save_dir_pattern = str(self.save_dir_pattern)
 
 
 # -------------------------
@@ -32,58 +39,122 @@ class GeneralConfig:
 
 @dataclass
 class DataConfig:
+    type: str = "cordex_ensemble"
     variables: List[str] = field(default_factory=lambda: ["pr"])
     variables_lr: Optional[List[str]] = None
-    n_models: int = 1
-    run_indices: List[int] = field(default_factory=lambda: list(range(8)))
+    preprocessing: 'DataPreprocessing' = field(default_factory=lambda: DataPreprocessing())
+    # runs selection config (maps to previous 'runs' in YAML)
+    @dataclass
+    class RunsConfig:
+        selection: str = "first_n"  # or 'explicit'
+        n_models: int = 1
+        indices: List[int] = field(default_factory=list)
+
+        def __post_init__(self):
+            self.selection = str(self.selection)
+            self.n_models = int(self.n_models)
+            if self.indices is None:
+                self.indices = []
+            elif isinstance(self.indices, list):
+                self.indices = [int(i) for i in self.indices]
+
+    runs: RunsConfig = field(default_factory=RunsConfig)
+    # Cordex-specific path patterns and modes
+    @dataclass
+    class CordexConfig:
+        root: str = ""
+        lr_pattern: str = ""
+        hr_pattern: str = ""
+        modes: dict = field(default_factory=dict)
+
+    cordex: CordexConfig = field(default_factory=CordexConfig)
+    # ensemble encoding (kept as mapping to preserve flexibility)
+    ensemble_encoding: dict = field(default_factory=dict)
+    # single_pair reader mapping (kept generic)
+    single_pair: dict = field(default_factory=dict)
+    # generic pattern reader config
+    patterns: dict = field(default_factory=dict)
+    
     kernel_size_lr: int = 1
     stride_lr: Optional[int] = None
     padding_lr: Optional[int] = None
     kernel_size_hr: int = 1
-    mask_gcm: bool = False
-    tr_te_split: str = "random"
-    tr_te_split_ratio: float = 0.9
-    test_model_index: Optional[int] = None
-    train_model_index: Optional[int] = None
-    train_run_indices: Optional[List[int]] = None
-    test_run_indices: Optional[List[int]] = None
-    clip_quantile_data: Optional[float] = None
-    only_winter: bool = False
-    filter_outliers: bool = False
+    stride_hr: Optional[int] = None
+    padding_hr: Optional[int] = None
+    n_models: int = 1
+    return_timepair: bool = False
+    run_indices: Optional[List[int]] = None
+    random_state: int = 42
+    validation_source: str = "auto"
+    validation_size: Optional[float] = None
+    validation_mode: Optional[str] = None
+    test_mode: Optional[str] = None
+    inference_mode: bool = False
+    inference_fill_value: str = "zeros"
+    
     precip_zeros: str = "random"
     data_dir: str = "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
-    ignore_one_hot_gcm: bool = False
-    ignore_one_hot_rcm: bool = False
-
+    
     def __post_init__(self):
         # lists
         self.variables = self._coerce_list(self.variables, str)
         self.variables_lr = self._coerce_optional_list(self.variables_lr, str)
-        self.run_indices = self._coerce_list(self.run_indices, int)
+        # self.run_indices = self._coerce_list(self.run_indices, int)
         # ints
-        self.n_models = int(self.n_models)
+        # self.n_models = int(self.n_models)
         self.kernel_size_lr = int(self.kernel_size_lr)
         self.kernel_size_hr = int(self.kernel_size_hr)
-        if self.stride_lr is not None:
-            self.stride_lr = int(self.stride_lr)
-        if self.padding_lr is not None:
-            self.padding_lr = int(self.padding_lr)
-        if self.test_model_index is not None:
-            self.test_model_index = int(self.test_model_index)
-        if self.train_model_index is not None:
-            self.train_model_index = int(self.train_model_index)
-        if self.test_run_indices is not None:
-            self.test_run_indices = self._coerce_list(self.test_run_indices, int)
-        if self.train_run_indices is not None:
-            self.train_run_indices = self._coerce_list(self.train_run_indices, int)
+        self.n_models = int(self.n_models)
+        
+        self.run_indices = self._coerce_optional_list(self.run_indices, int)
+        self.return_timepair = bool(self.return_timepair)
+        self.inference_mode = bool(self.inference_mode)
         # floats
-        self.tr_te_split_ratio = float(self.tr_te_split_ratio)
-        if self.clip_quantile_data is not None:
-            self.clip_quantile_data = float(self.clip_quantile_data)
+        if self.validation_size is not None:
+            self.validation_size = float(self.validation_size)
         # strings
-        self.tr_te_split = str(self.tr_te_split)
+        self.validation_source = str(self.validation_source).lower()
+        if self.validation_mode is not None:
+            self.validation_mode = str(self.validation_mode)
+        if self.test_mode is not None:
+            self.test_mode = str(self.test_mode)
+        self.inference_fill_value = str(self.inference_fill_value).lower()
         self.precip_zeros = str(self.precip_zeros)
         self.data_dir = str(self.data_dir)
+        # ensure preprocessing exists
+        if isinstance(self.preprocessing, dict):
+            self.preprocessing = DataPreprocessing(**self.preprocessing)
+        if self.preprocessing is None:
+            self.preprocessing = DataPreprocessing()
+        # ensure runs exist
+        if isinstance(self.runs, dict):
+            self.runs = DataConfig.RunsConfig(**self.runs)
+        if self.runs is None:
+            self.runs = DataConfig.RunsConfig()
+        # ensure cordex exists
+        if isinstance(self.cordex, dict):
+            self.cordex = DataConfig.CordexConfig(**self.cordex)
+        if self.cordex is None:
+            self.cordex = DataConfig.CordexConfig()
+        # ensemble_encoding as dict
+        if self.ensemble_encoding is None:
+            self.ensemble_encoding = {}
+        if not isinstance(self.ensemble_encoding, dict):
+            raise ValueError("ensemble_encoding must be a mapping with keys 'enabled' and 'scheme'")
+        enabled = bool(self.ensemble_encoding.get("enabled", False))
+        scheme = str(self.ensemble_encoding.get("scheme", "gcm+rcm"))
+        valid_schemes = {"gcm", "rcm", "gcm+rcm"}
+        if enabled and scheme not in valid_schemes:
+            raise ValueError(
+                f"Unknown ensemble_encoding.scheme: {scheme}. "
+                f"Expected one of {sorted(valid_schemes)}"
+            )
+        self.ensemble_encoding = {"enabled": enabled, "scheme": scheme}
+        # single_pair as dict
+        if self.single_pair is None:
+            self.single_pair = {}
+        if self.patterns is None:
+            self.patterns = {}
 
     @staticmethod
     def _coerce_list(val, element_type):
@@ -99,17 +170,46 @@ class DataConfig:
             return None
         return DataConfig._coerce_list(val, element_type)
 
+    @staticmethod
+    def _coerce_optional_int(val):
+        if val is None:
+            return None
+        if isinstance(val, str) and val.lower() == "none":
+            return None
+        return int(val)
+
 @dataclass
 class DataPreprocessing:
     norm_method_input: Optional[str] = None
     norm_method_output: Optional[str] = None
     fft: bool = False
-    logit_transform: bool = False
     normal_transform: bool = False
+    logit_transform: bool = False
     clip_quantile: Optional[float] = None
-    sqrt_transform_out: bool = False
-    sqrt_transform_in: bool = False
+    # per-variable sqrt transforms expected as mapping: {var: bool}
+    sqrt_transform_out: dict = field(default_factory=dict)
+    sqrt_transform_in: dict = field(default_factory=dict)
     sep_mean_std: bool = False
+    use_precomputed_hr: bool = False
+    normalized_hr_root: str = ""
+    normalized_hr_pattern: str = ""
+    normalized_hr_modes: dict = field(default_factory=dict)
+    normalized_hr_suffix_by_var: dict = field(default_factory=dict)
+    normalized_hr_default_suffix: str = ""
+    normalized_hr_filter_outliers: bool = False
+    # stats and post_transform are nested structures in the YAML
+    @dataclass
+    class PostTransform:
+        logit: bool = False
+        gaussian: bool = False
+
+    @dataclass
+    class StatsConfig:
+        root: str = ""
+        pattern: dict = field(default_factory=dict)
+
+    stats: StatsConfig = field(default_factory=StatsConfig)
+    post_transform: PostTransform = field(default_factory=PostTransform)
 
     def __post_init__(self):
         # strings
@@ -119,11 +219,39 @@ class DataPreprocessing:
             self.norm_method_output = str(self.norm_method_output)
         # bools
         self.fft = bool(self.fft)
-        self.logit_transform = bool(self.logit_transform)
-        self.normal_transform = bool(self.normal_transform)
-        self.sqrt_transform_out = bool(self.sqrt_transform_out)
-        self.sqrt_transform_in = bool(self.sqrt_transform_in)
         self.sep_mean_std = bool(self.sep_mean_std)
+        self.use_precomputed_hr = bool(self.use_precomputed_hr)
+        self.normalized_hr_root = str(self.normalized_hr_root)
+        self.normalized_hr_pattern = str(self.normalized_hr_pattern)
+        self.normalized_hr_filter_outliers = bool(self.normalized_hr_filter_outliers)
+        self.normalized_hr_default_suffix = str(self.normalized_hr_default_suffix)
+        # dicts: ensure dict types for sqrt transforms and stats.pattern
+        if self.sqrt_transform_in is None:
+            self.sqrt_transform_in = {}
+        if self.sqrt_transform_out is None:
+            self.sqrt_transform_out = {}
+        if self.normalized_hr_suffix_by_var is None:
+            self.normalized_hr_suffix_by_var = {}
+        if self.normalized_hr_modes is None:
+            self.normalized_hr_modes = {}
+        if not isinstance(self.normalized_hr_suffix_by_var, dict):
+            raise ValueError("normalized_hr_suffix_by_var must be a dict")
+        if not isinstance(self.normalized_hr_modes, dict):
+            raise ValueError("normalized_hr_modes must be a dict")
+        # coerce nested dicts to dataclasses when loaded from YAML
+        if isinstance(self.stats, dict):
+            self.stats = DataPreprocessing.StatsConfig(**self.stats)
+        if self.stats is None:
+            self.stats = DataPreprocessing.StatsConfig()
+        if isinstance(self.post_transform, dict):
+            self.post_transform = DataPreprocessing.PostTransform(**self.post_transform)
+        if self.post_transform is None:
+            self.post_transform = DataPreprocessing.PostTransform()
+        # Keep old flat keys and nested post_transform in sync.
+        self.logit_transform = bool(self.logit_transform or self.post_transform.logit)
+        self.post_transform.logit = bool(self.logit_transform)
+        self.normal_transform = bool(self.normal_transform or self.post_transform.gaussian)
+        self.post_transform.gaussian = bool(self.normal_transform)
         # floats
         if self.clip_quantile is not None:
             self.clip_quantile = float(self.clip_quantile)
@@ -200,8 +328,8 @@ class LossConfig:
     norm_loss_batch: bool = False
     agg_norm_loss: str = "mean"
     norm_loss_per_var: bool = False
-    p_norm_loss_loc: Optional[List[float]] = None
-    p_norm_loss_batch: Optional[List[float]] = None
+    p_norm_loss_loc: Optional[List[float]] = field(default_factory=lambda: [4.0])
+    p_norm_loss_batch: Optional[List[float]] = field(default_factory=lambda: [4.0])
     lambda_coarse: float = 0.5
     beta: float = 1.0
     beta_norm_loss: float = 1.0
@@ -279,6 +407,7 @@ class TrainingConfig:
     alpha: float = 1.0
     burn_in: int = 0
     save_model_every: int = 50
+    num_workers: int = 1
 
     def __post_init__(self):
         self.batch_size = int(self.batch_size)
@@ -288,6 +417,7 @@ class TrainingConfig:
         self.alpha = float(self.alpha)
         self.burn_in = int(self.burn_in)
         self.save_model_every = int(self.save_model_every)
+        self.num_workers = int(self.num_workers)
 
 # -------------------------
 # Root config
@@ -301,4 +431,11 @@ class Config:
     loss: LossConfig = field(default_factory=LossConfig)
     sparse_layers: SparseLocalLayerConfig = field(default_factory=SparseLocalLayerConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
-    preprocessing: DataPreprocessing = field(default_factory=DataPreprocessing)
+    def __post_init__(self):
+        # Backwards compatibility: expose top-level `preprocessing` for older code
+        self.preprocessing = self.data.preprocessing
+        # also expose save_dir roots/pattern at top-level for older callers
+        self.save_dir_root_local = self.general.save_dir_root_local
+        self.save_dir_root_server = self.general.save_dir_root_server
+        self.save_dir_pattern = self.general.save_dir_pattern
+

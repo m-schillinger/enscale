@@ -1,243 +1,18 @@
 import torch
 import os
 import random
-import matplotlib.pyplot as plt
-from torchvision.utils import make_grid
 from modules import StoUNet
 from modules_cnn import Generator16x, Generator4x, Generator4xConcat, Generator2x
 from modules_loc_variant import RectUpsampleWithResiduals
 from loss_func import energy_loss_two_sample, avg_constraint_per_var, energy_loss_multivariate_summed, norm_loss_multivariate_summed
-import torch.nn.functional as F
-import torch.linalg as LA
 
-from data import get_data_2step_naive_avg
+from data_v2 import get_data_v2
 import argparse
-from load_config import load_config
+import load_config_v2
 from utils import *
 import sys
-import pdb
 import time
 sys.path.append("..")
-
-
-def visual_sample(model, x, y, save_dir, norm_method=None, norm_stats=None, sqrt_transform=True, square_data=False, mode_unnorm = "hr", 
-                  one_hot_dim=None, logit=False, normal=False, fft=False, one_hot_in_super=False, conv=False, x_one_hot=None):
-    if not cfg.model.dropout:
-        model.eval()
-    with torch.no_grad():
-        if not cfg.model.conv and not cfg.model.conv_concat:
-            x = x.view(x.shape[0], -1)
-            y = y.view(y.shape[0], -1)
-        if cfg.model.add_x_in_super: # DIRTY
-            x = torch.cat([x, x_one_hot[:, :720]], dim=1)
-        
-        if not cfg.model.nicolai_layers:
-            x = add_one_hot(x, one_hot_in_super=one_hot_in_super, conv=conv, x=x_one_hot, one_hot_dim=one_hot_dim)
-        
-        if cfg.sparse_layers.latent_dim == len(cfg.data.variables) and cfg.model.nicolai_layers and cfg.sparse_layers.add_intermediate_loss:
-            plot_intermediate = True
-            if cfg.sparse_layers.double_linear:
-                gen, _, y_interm = model(x, return_latent=True)
-                gen2, _, y_interm2 = model(x, return_latent=True)
-            else:
-                gen, y_interm = model(x, return_latent=True)
-                gen2, y_interm2 = model(x, return_latent=True)
-        elif cfg.model.nicolai_layers and one_hot_in_super:
-            cls_ids = torch.from_numpy(
-                get_run_index_from_onehot(x_one_hot[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(x.device)
-            gen, y_upsampled = model(x, cls_ids=cls_ids, return_mean=True)
-            gen2, y_upsampled2 = model(x, cls_ids=cls_ids, return_mean=True)
-            y_interm = gen - y_upsampled.view(gen.shape[0], -1)
-            y_interm2 = gen2 - y_upsampled2.view(gen.shape[0], -1)
-            plot_intermediate = True
-        elif cfg.model.nicolai_layers:
-            gen, y_upsampled = model(x, return_mean=True)
-            gen2, y_upsampled2 = model(x, return_mean=True)
-            y_interm = gen - y_upsampled.view(gen.shape[0], -1)
-            y_interm2 = gen2 - y_upsampled2.view(gen.shape[0], -1)
-            plot_intermediate = True
-        else:
-            plot_intermediate = False
-            gen = model(x)
-            gen2 = model(x)    
-    for i in range(len(cfg.data.variables)):
-        if len(gen.shape) == 3:
-            gen_var = gen[:, i, :]
-            gen_var2 = gen2[:, i, :]
-        else:
-            dim_per_var = gen.size(1) // len(cfg.data.variables)
-            gen_var = gen[:, i * dim_per_var:(i + 1) * dim_per_var]
-            gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
-            
-        if len(y.shape) == 3:
-            y_var = y[:, i, :]
-        else:
-            dim_per_var = gen.size(1) // len(cfg.data.variables)
-            y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-        
-        if norm_stats is not None:
-            norm_stats_var = norm_stats[cfg.data.variables[i]]
-        else:
-            norm_stats_var = None
-        gen_var = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
-                    final_square=square_data, logit=logit, normal=normal).unsqueeze(1)
-        gen_var2 = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var,
-                    final_square=square_data, logit=logit, normal=normal).unsqueeze(1) 
-        y_var = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
-                           final_square=square_data, logit=logit, normal=normal).unsqueeze(1)
-        
-        if plot_intermediate and norm_stats_var is None:
-            # shape of intermediate (B, npix, map_dim) 
-            intermediate_var = y_interm[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm.shape[0], 1, 128 // cfg.data.kernel_size_hr, 128 // cfg.data.kernel_size_hr)
-            intermediate_var2 = y_interm2[:, i * dim_per_var:(i + 1) * dim_per_var].view(y_interm2.shape[0], 1, 128 // cfg.data.kernel_size_hr, 128 // cfg.data.kernel_size_hr)
-            sample = torch.cat([y_var.cpu(), intermediate_var.cpu(), intermediate_var2.cpu(), gen_var.cpu(), gen_var2.cpu() ])
-        else:
-            sample = torch.cat([y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
-        sample = torch.clamp(sample, torch.quantile(y_var, 0.0005).item(), torch.quantile(y_var, 0.9995).item())
-        plt.matshow(make_grid(sample, nrow=y.shape[0]).permute(1, 2, 0)[:,:,0], cmap="rainbow"); plt.axis('off'); 
-        plt.savefig(save_dir + f"_var-{cfg.data.variables[i]}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
-        # save_image(sample, save_dir, normalize=True, scale_each=True)
-    model.train()
-    
-
-def get_eval_samples(current_model, current_test_loader, mode_unnorm="hr", norm_method=None, norm_stats=None, 
-                     input_mode = "x", output_mode = "y", logit=False, normal=False, one_hot_in_super=False, conv=False, one_hot_dim=None):
-    if not cfg.model.dropout:
-        current_model.eval()
-    samples = []
-    trues = []
-    with torch.no_grad():
-        n_batches = 0
-        for data_te in current_test_loader:
-            x_te, xc_te, y_te = data_te
-            x_te, xc_te, y_te = x_te.to(device), xc_te.to(device), y_te.to(device)
-            x_te = x_te.view(x_te.shape[0], -1)
-            
-            if not cfg.model.conv and not cfg.model.conv_concat:
-                # x_te = x_te.view(x_te.shape[0], -1)
-                y_te = y_te.view(y_te.shape[0], -1)
-                xc_te = xc_te.view(xc_te.shape[0], -1)
-            
-            if input_mode == "x":
-                gen = current_model.sample(x_te, sample_size=5)
-            elif input_mode == "xc":
-                if cfg.model.add_x_in_super:
-                    xc_te = torch.cat([xc_te, x_te[:, :720]], dim=1)
-                    
-                if not cfg.model.nicolai_layers:
-                    xc_te = add_one_hot(xc_te, one_hot_in_super=one_hot_in_super, conv=conv, x=x_te, one_hot_dim=one_hot_dim)
-                    gen = current_model.sample(xc_te, sample_size=5)
-                elif one_hot_in_super:
-                    cls_ids = get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
-                    gen = current_model.sample(xc_te, cls_ids=cls_ids, sample_size=5)
-                else:
-                    gen = current_model.sample(xc_te, sample_size=5)
-            gen_raw_allvars_list = []
-            for i in range(len(cfg.data.variables)):
-                
-                if norm_stats is not None:
-                    norm_stats_var = norm_stats[cfg.data.variables[i]]
-                else:
-                    norm_stats_var = None
-                
-                gen_raw_var_list = []
-                for j in range(5):
-                    if len(gen.shape) == 4: # 
-                        gen_var_sample = gen[:, i, :, j]
-                    elif len(gen.shape) == 3:
-                        dim_per_var = gen.size(1) // len(cfg.data.variables)
-                        gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
-                    gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                        norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                        logit=logit, normal=normal)
-                    gen_raw_var_list.append(gen_raw)
-                    
-                gen_raw_var = torch.stack(gen_raw_var_list, dim=-1)
-                gen_raw_allvars_list.append(gen_raw_var)
-            gen_raw_allvars = torch.stack(gen_raw_allvars_list, dim=1)        
-                
-            if output_mode == "y":
-                y = y_te
-            elif output_mode == "xc":
-                y = xc_te
-                
-            try:
-                y_te_raw_allvars_list = []
-                for i in range(len(cfg.data.variables)):
-                    
-                    if norm_stats is not None:
-                        norm_stats_var = norm_stats[cfg.data.variables[i]]
-                    else:
-                        norm_stats_var = None
-                    
-                    if len(y.shape) == 3:
-                        y_var = y[:, i, :]
-                    elif len(y.shape) == 2:
-                        dim_per_var = y.size(1) // len(cfg.data.variables)
-                        y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-                    y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                        norm_method=norm_method, norm_stats=norm_stats_var, logit=logit, normal=normal)
-                    y_te_raw_allvars_list.append(y_te_raw)
-                y_te_raw_allvars = torch.stack(y_te_raw_allvars_list, dim=1)
-                
-            except RuntimeError:
-                pdb.set_trace()
-            samples.append(gen_raw_allvars)
-            trues.append(y_te_raw_allvars)
-            n_batches += 1
-            if n_batches > 2:
-                break
-    current_model.train()
-    samples = torch.cat(samples, dim=0)
-    trues = torch.cat(trues, dim=0)
-    
-    return trues, samples
-            
-
-def plot_rh(trues, samples, epoch_idx, save_dir, file_suffix = ""):
-    # plot RH spatial max
-    forecasts = torch.amax(samples, dim = (-3, -2))
-    ground_truth = torch.amax(trues, dim = (-2, -1))
-    hist, mean, variance = compute_rank_histogram(ground_truth, forecasts, axis = -1, method = "min")
-    plt.bar(range(1,forecasts.shape[-1]+2), hist[0])
-    plt.title("Rank histogram for spatial max")
-    plt.savefig(save_dir + f"rank_hist_spatial-max_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
-    
-    # plot RH spatial quantile
-    
-    #forecasts = torch.mean(samples, dim = (-3, -2))
-    #ground_truth = torch.mean(trues, dim = (-2, -1))
-    q = 0.99
-    forecasts = torch.quantile(samples.flatten(-3, -2), q, dim = -2)
-    ground_truth = torch.quantile(trues.flatten(-2, -1), q, dim = -1)
-    hist, mean, variance = compute_rank_histogram(ground_truth, forecasts, axis = -1, method = "min")
-    plt.bar(range(1,forecasts.shape[-1]+2), hist[0])
-    plt.title("Rank histogram for spatial q0.99")
-    plt.savefig(save_dir + f"rank_hist_spatial-quantile0.99_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
-    
-    # plot RH spatial mean
-    forecasts = torch.mean(samples, dim = (-3, -2))
-    ground_truth = torch.mean(trues, dim = (-2, -1))
-    hist, mean, variance = compute_rank_histogram(ground_truth, forecasts, axis = -1, method = "min")
-    plt.bar(range(1,forecasts.shape[-1]+2), hist[0])
-    plt.title("Rank histogram for spatial mean")
-    plt.savefig(save_dir + f"rank_hist_spatial-mean_{epoch_idx}{file_suffix}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
-
-def add_one_hot(xc, one_hot_in_super=False, conv=False, x=None, one_hot_dim=0):
-    # if one_hot_in_super and conv:
-        # OLD & WRONG
-        #one_hot = x[:, -one_hot_dim:]
-        #one_hot_combined = one_hot.sum(dim=1, keepdim=True)  # Shape: (BS, 1)
-        #one_hot_channel = one_hot_combined.view(xc.shape[0], 1, 1).expand(-1, 1, xc.shape[2]) # Shape: (BS, 1, image_size * image_size)
-        #xc = torch.cat([xc, one_hot_channel], dim=1)  # Shape: (BS, n_channels + 1, image_size * image_size)
-    if one_hot_in_super and conv:
-        one_hot = x[:, -one_hot_dim:]  # Shape: (BS, one_hot_dim)
-        one_hot_channels = one_hot.unsqueeze(-1).expand(-1, -1, xc.shape[2])  # Shape: (BS, one_hot_dim, image_size²)
-        xc = torch.cat([xc, one_hot_channels], dim=1)  # Shape: (BS, n_channels + one_hot_dim, image_size²)
-
-    elif one_hot_in_super and not conv:
-        xc = torch.cat([xc, x[:, -one_hot_dim:]], dim=1)
-    return xc
 
 if __name__ == '__main__':
 
@@ -245,9 +20,9 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser()
         parser.add_argument("--config", type=str, required=True)
         return parser.parse_args()
-
+    
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config_v2.load_config_v2(args.config)
     
     random.seed(cfg.general.seed)
     torch.manual_seed(cfg.general.seed)
@@ -264,27 +39,9 @@ if __name__ == '__main__':
         subfolder = "coarse"
     else:
         subfolder = f"lr{cfg.data.kernel_size_lr}_hr{cfg.data.kernel_size_hr}"
-    if not cfg.model.conv and not cfg.model.conv_concat and not cfg.model.nicolai_layers:
-        if cfg.general.server == "ada":
-            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/hidden{cfg.model.hidden_dim}_num-l-{cfg.model.num_layer}_layer-shr-{cfg.model.layer_shrinkage}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        elif cfg.general.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{cfg.data.variables[0]}/hidden{cfg.model.hidden_dim}_num-l-{cfg.model.num_layer}_layer-shr-{cfg.model.layer_shrinkage}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-    elif cfg.model.nicolai_layers:
-        if cfg.general.server == "ada":
-            #num_neighbors_ups=9,                          num_neighbours_res=25,                             map_dim=12,                             noise_dim=5,                             mlp_hidden=100,                             mlp_depth=3,                           noise_dim_mlp=0
-            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        elif cfg.general.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/loc-specific-layers_norm-out-{cfg.preprocessing.norm_method_output}_{cfg.general.save_name}/"
-    elif cfg.model.conv:
-        if cfg.general.server == "ada":
-            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/conv-{cfg.model.conv}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        elif cfg.general.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-{cfg.model.conv}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-    elif cfg.model.conv_concat:
-        if cfg.general.server == "ada":
-            save_dir = f"results/{cfg.model.method}/super/{subfolder}/var-{variables_str}/conv-concat-{cfg.model.conv_concat}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        elif cfg.general.server == "euler":
-            save_dir = f"/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/super/{subfolder}/var-{variables_str}/conv-concat-{cfg.model.conv_concat}-dim{cfg.model.conv_dim}_avc-c-{cfg.loss.avg_constraint}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+    
+    # Build save directory path using helper function
+    save_dir = build_save_dir(cfg, variables_str, subfolder=subfolder, stage="super")
     make_folder(save_dir)
     write_config_to_file(cfg, save_dir)
     
@@ -325,26 +82,10 @@ if __name__ == '__main__':
     elif cfg.general.server == "euler":
         root = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
     gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root)
+    encoding_scheme = get_ensemble_encoding_scheme(cfg)
     
     #### load data
-    train_loader, test_loader_in = get_data_2step_naive_avg(n_models=cfg.data.n_models, 
-                                                            run_indices=cfg.data.run_indices,
-                                                            variables=cfg.data.variables, 
-                                                            variables_lr=cfg.data.variables_lr,
-                                                            batch_size=cfg.training.batch_size,
-                                                            norm_input=cfg.preprocessing.norm_method_input, norm_output=cfg.preprocessing.norm_method_output,
-                                                            sqrt_transform_in=cfg.preprocessing.sqrt_transform_in, sqrt_transform_out=cfg.preprocessing.sqrt_transform_out,
-                                                            kernel_size=cfg.data.kernel_size_lr, 
-                                                            kernel_size_hr=cfg.data.kernel_size_hr,
-                                                            clip_quantile=cfg.data.clip_quantile_data,
-                                                            tr_te_split=cfg.data.tr_te_split, 
-                                                            logit=cfg.preprocessing.logit_transform,
-                                                            normal=cfg.preprocessing.normal_transform,
-                                                            server=cfg.general.server,
-                                                            stride_lr=cfg.data.stride_lr,
-                                                            padding_lr=cfg.data.padding_lr,
-                                                            filter_outliers=cfg.data.filter_outliers,
-                                                            precip_zeros=cfg.data.precip_zeros)
+    train_loader, test_loader_in = get_data_v2(cfg, validation_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))
@@ -355,52 +96,30 @@ if __name__ == '__main__':
     #### get norm stats file
     if cfg.general.server == "euler":
         cfg.data.data_dir = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear"
-    norm_stats = {}
-    for i in range(len(cfg.data.variables)):
-        if cfg.data.kernel_size_hr == 1:
-            mode_unnorm = "hr"
-        elif cfg.data.kernel_size_hr == 2:
-            mode_unnorm = "hr_avg_2"
-            # raise NotImplementedError("Kernel size hr: only 1 or 4 are implemented")
-        elif cfg.data.kernel_size_hr == 4:
-            mode_unnorm = "hr_avg_4"
-        elif cfg.data.kernel_size_hr == 8:
-            mode_unnorm = "hr_avg_8"
-        elif cfg.data.kernel_size_hr == 16:
-            mode_unnorm = "hr_avg"
-        elif cfg.data.kernel_size_hr == 32:
-            mode_unnorm = "hr_avg_32"
-        elif cfg.data.kernel_size_hr == 64:
-            mode_unnorm = "hr_avg_64"
-        if cfg.data.variables[i] in ["pr", "sfcWind"] and cfg.preprocessing.sqrt_transform_out:
-            name_str = "_sqrt"
-        else:
-            name_str = ""
-        if cfg.data.kernel_size_hr == 1:
-            if cfg.preprocessing.norm_method_output == "normalise_pw":
-                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_pixelwise_" + cfg.data.variables[i] + "_train_ALL" + name_str + ".pt")
-                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
-            elif cfg.preprocessing.norm_method_output == "normalise_scalar":
-                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_full-data_" + cfg.data.variables[i] + "_train_ALL" + name_str + ".pt")
-                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
-            elif cfg.preprocessing.norm_method_output == "uniform": #"hr_norm_stats_ecdf_matrix_" + data_type + "_train_" + "ALL" + name_str + ".pt")
-                name_str = ""
-                ns_path = os.path.join(cfg.data.data_dir, "norm_stats", f"{mode_unnorm}_norm_stats_ecdf_matrix_" + cfg.data.variables[i] + "_train_SUBSAMPLE" + name_str + ".pt")
-                norm_stats[cfg.data.variables[i]] = torch.load(ns_path, map_location=device)
-            else:
-                norm_stats[cfg.data.variables[i]] = None
-        else:
-            norm_stats[cfg.data.variables[i]] = None
+    
+    # Determine mode for unnormalisation
+    mode_unnorm = get_mode_from_kernel_size(cfg.data.kernel_size_hr)
+    
+    # Load normalisation statistics for all variables only if full HR
+    if cfg.data.kernel_size_hr == 1:
+        norm_stats = load_norm_stats_for_variables(
+            cfg.data.preprocessing,
+            "hr",
+            cfg.data.variables,
+            device=device,
+        )
+    else:
+        norm_stats = None
         
     #### build model
     if cfg.model.method == 'eng_2step':
         n_vars = 1
-        assert cfg.preprocessing.norm_method_output != "rank_val"
+        assert cfg.data.preprocessing.norm_method_output != "rank_val"
         # in_dim = x_tr_eval.shape[1]
         if len(cfg.data.variables) > 1:
             out_dim = y_tr_eval.shape[-1] * len(cfg.data.variables)
         else:
-            if cfg.preprocessing.fft:
+            if cfg.data.preprocessing.fft:
                 out_dim = 2 * y_tr_eval.shape[-1]
             else:
                 out_dim = y_tr_eval.shape[-1]
@@ -412,7 +131,14 @@ if __name__ == '__main__':
         val_dim = None
         n_channels = xc_tr_eval.shape[1]
         if cfg.model.one_hot_in_super:
-            one_hot_dim = 7
+            if encoding_scheme == "gcm":
+                one_hot_dim = len(gcm_dict)
+            elif encoding_scheme == "rcm":
+                one_hot_dim = len(rcm_dict)
+            elif encoding_scheme == "gcm+rcm":
+                one_hot_dim = len(gcm_dict) + len(rcm_dict)
+            else:
+                one_hot_dim = 0
             interm_dim += one_hot_dim
         else:
             one_hot_dim = 0
@@ -423,19 +149,19 @@ if __name__ == '__main__':
             assert len(cfg.data.variables) == 1
         
         if cfg.model.conv and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
-            assert not args.conv_concat
+            assert not cfg.model.conv_concat
             print("building 16x conv model")
             assert not cfg.model.one_hot_in_super # not implemented yet
             model = Generator16x(conv_dim=cfg.model.conv_dim, n_channels=n_channels).to(device)
         elif cfg.model.conv and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
-            assert not args.conv_concat
+            assert not cfg.model.conv_concat
             print("building 4x conv model")
             model = Generator4x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
                                 image_size=128//cfg.data.kernel_size_lr).to(device)
         elif cfg.model.conv_concat and cfg.data.kernel_size_lr == 16 and cfg.data.kernel_size_hr == 1:
             raise NotImplementedError("Concatenating noise for kernel size 16 not implemented yet")
         elif cfg.model.conv_concat and (cfg.data.kernel_size_lr // cfg.data.kernel_size_hr == 4):
-            assert not args.conv
+            assert not cfg.model.conv
             print("building 4x conv model")
             model = Generator4xConcat(conv_dim=cfg.model.conv_dim, n_channels=n_channels, one_hot_channel=cfg.model.one_hot_in_super, one_hot_dim=one_hot_dim,
                                       num_noise_channels=cfg.model.num_noise_channels,
@@ -445,11 +171,18 @@ if __name__ == '__main__':
             model = Generator2x(conv_dim=cfg.model.conv_dim, n_channels=n_channels, image_size=128//cfg.data.kernel_size_lr).to(device)
         elif cfg.model.nicolai_layers:
             if cfg.model.one_hot_in_super:
-                num_classes = 8
+                if encoding_scheme == "gcm":
+                    num_classes = len(gcm_dict)
+                elif encoding_scheme == "rcm":
+                    num_classes = len(rcm_dict)
+                elif encoding_scheme == "gcm+rcm":
+                    num_classes = len(gcm_list)
+                else:
+                    num_classes = 1
                 if cfg.model.one_hot_only_in_ups:
                     num_classes_resid = 1
                 else:
-                    num_classes_resid = 8
+                    num_classes_resid = num_classes
             else:
                 num_classes = 1
                 num_classes_resid = 1
@@ -533,11 +266,25 @@ if __name__ == '__main__':
                 
             if cfg.model.nicolai_layers:
                 if cfg.model.one_hot_in_super:
-                    cls_ids = torch.from_numpy(
-                        get_run_index_from_onehot(x[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)).to(xc.device)
+                    if one_hot_dim <= 0 or encoding_scheme is None:
+                        cls_ids = None
+                    elif encoding_scheme in {"gcm", "rcm"}:
+                        cls_ids = torch.argmax(x[:, -one_hot_dim:], dim=1)
+                    else:
+                        cls_ids = torch.from_numpy(
+                            get_run_index_from_onehot(
+                                x[:, -one_hot_dim:],
+                                gcm_dict=gcm_dict,
+                                rcm_dict=rcm_dict,
+                                rcm_list=rcm_list,
+                                gcm_list=gcm_list,
+                                mode="joint",
+                            )
+                        ).to(xc.device)
                     #x[:, -one_hot_dim:]
                 else:
                     cls_ids = None
+            
             if cfg.model.nicolai_layers and not cfg.sparse_layers.double_linear and cfg.sparse_layers.add_intermediate_loss:
                 gen1, y_interm = model(xc, cls_ids=cls_ids, return_latent=True)
                 gen2, y_interm2 = model(xc, cls_ids=cls_ids, return_latent=True)
@@ -571,11 +318,6 @@ if __name__ == '__main__':
                 loss_interm = loss_interm.sum(dim=1).mean()
                 
                 loss += cfg.sparse_layers.lambda_mse_loss * loss_interm
-
-            if torch.isnan(loss):
-                print('Loss is NaN')
-                pdb.set_trace()
-                continue
             
             if cfg.loss.avg_constraint:
                 contraint = avg_constraint_per_var(xc, gen1, n_vars=len(cfg.data.variables))
@@ -639,15 +381,10 @@ if __name__ == '__main__':
                                 gen_var = gen1[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
                             
-                            y_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]],
-                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
-                            gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
-                            gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                            s1, s2 = get_spatial_dims_from_mode(mode_unnorm)
+                            y_raw = unnormalise(y_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                            gen1_raw = unnormalise(gen_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                            gen2_raw = unnormalise(gen_var2, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
                             loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_raw, gen1_raw, gen2_raw, verbose=True, beta=cfg.loss.beta)
                             loss_tr_raw += loss_raw.item()
                             s1_tr_raw += s1_raw.item()
@@ -696,9 +433,21 @@ if __name__ == '__main__':
                             
                         if cfg.model.nicolai_layers:
                             if cfg.model.one_hot_in_super:
-                                cls_ids = torch.from_numpy(
-                                    get_run_index_from_onehot(x_te[:, -one_hot_dim:], gcm_dict=gcm_dict, rcm_dict=rcm_dict, rcm_list=rcm_list, gcm_list=gcm_list)
-                                ).to(xc_te.device)
+                                if one_hot_dim <= 0 or encoding_scheme is None:
+                                    cls_ids = None
+                                elif encoding_scheme in {"gcm", "rcm"}:
+                                    cls_ids = torch.argmax(x_te[:, -one_hot_dim:], dim=1)
+                                else:
+                                    cls_ids = torch.from_numpy(
+                                        get_run_index_from_onehot(
+                                            x_te[:, -one_hot_dim:],
+                                            gcm_dict=gcm_dict,
+                                            rcm_dict=rcm_dict,
+                                            rcm_list=rcm_list,
+                                            gcm_list=gcm_list,
+                                            mode="joint",
+                                        )
+                                    ).to(xc_te.device)
                             else:
                                 cls_ids = None
                         
@@ -715,7 +464,7 @@ if __name__ == '__main__':
                             gen1 = model(add_one_hot(xc_te, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
                             gen2 = model(add_one_hot(xc_te, one_hot_in_super=cfg.model.one_hot_in_super, conv=(cfg.model.conv or cfg.model.conv_concat), x=x_te, one_hot_dim=one_hot_dim))
                         
-                        if cfg.preprocessing.fft:
+                        if cfg.data.preprocessing.fft:
                             gen1 = fftpred2y(gen1)
                             gen2 = fftpred2y(gen2)
                         
@@ -764,15 +513,11 @@ if __name__ == '__main__':
                                     y_var = y_te[:, i * dim_per_var:(i + 1) * dim_per_var]
                                     gen_var = gen1[:, i * dim_per_var:(i + 1) * dim_per_var]
                                     gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
-                                gen1_raw = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
-                                gen2_raw = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
-                                y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]],
-                                                    logit=cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform)
+                                
+                                s1, s2 = get_spatial_dims_from_mode(mode_unnorm)
+                                gen1_raw = unnormalise(gen_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                                gen2_raw = unnormalise(gen_var2, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                                y_te_raw = unnormalise(y_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
                                 
                                 loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_te_raw, gen1_raw, gen2_raw, verbose=True)
                                 loss_te_raw += loss_raw.item()
@@ -814,39 +559,43 @@ if __name__ == '__main__':
         if (epoch_idx == 0 or (epoch_idx + 1) % cfg.general.sample_every_nepoch == 0):
             
             # loss scale
-            visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_loss-scale_super', 
-                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                          logit=False, normal = False, fft=cfg.preprocessing.fft, mode_unnorm=mode_unnorm,
-                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
-            visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_loss-scale_super', 
-                          norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                          logit=False, normal = False, fft=cfg.preprocessing.fft, mode_unnorm=mode_unnorm,
-                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
+            visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_loss-scale_super',
+                          cfg=cfg, norm_stats=None, mode_unnorm=mode_unnorm,
+                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval,
+                          one_hot_in_super=cfg.model.one_hot_in_super,
+                          gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
+            visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_loss-scale_super',
+                          cfg=cfg, norm_stats=None, mode_unnorm=mode_unnorm,
+                          one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_te_eval,
+                          one_hot_in_super=cfg.model.one_hot_in_super,
+                          gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
             
             if cfg.data.kernel_size_hr == 1: # if HR target is not coarsened also
-                if cfg.preprocessing.norm_method_output == "uniform" and cfg.preprocessing.logit_transform:
+                if cfg.data.preprocessing.norm_method_output == "uniform" and cfg.data.preprocessing.logit_transform:
                     # in this case, also visualise on uniformly transformed scale
-                        visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_unif-scale_super', 
-                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                            logit = True, fft=cfg.preprocessing.fft,
-                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
+                        visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_unif-scale_super',
+                            cfg=cfg, norm_stats=None, mode_unnorm=mode_unnorm,
+                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval,
+                            one_hot_in_super=cfg.model.one_hot_in_super,
+                            gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
                     
-                        visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_unif-scale_super', 
-                            norm_method=None, norm_stats=None, square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                            logit = True, fft=cfg.preprocessing.fft,
-                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
+                        visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_unif-scale_super',
+                            cfg=cfg, norm_stats=None, mode_unnorm=mode_unnorm,
+                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_te_eval,
+                            one_hot_in_super=cfg.model.one_hot_in_super,
+                            gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
                 
                 # super model on raw data scale
-                visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_super', 
-                            norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats,
-                        square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                        logit = cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform, fft=cfg.preprocessing.fft,
-                        one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
-                visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_super', 
-                        norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats,
-                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out,
-                    logit = cfg.preprocessing.logit_transform, normal=cfg.preprocessing.normal_transform, fft=cfg.preprocessing.fft,
-                    one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval, one_hot_in_super=cfg.model.one_hot_in_super)
+                visual_sample(model, xc_tr_eval, y_tr_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_super',
+                            cfg=cfg, norm_stats=norm_stats, mode_unnorm=mode_unnorm,
+                            one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_tr_eval,
+                            one_hot_in_super=cfg.model.one_hot_in_super,
+                            gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
+                visual_sample(model, xc_te_eval, y_te_eval, save_dir=save_dir + f'img_{epoch_idx + 1}_te_super',
+                        cfg=cfg, norm_stats=norm_stats, mode_unnorm=mode_unnorm,
+                        one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), x_one_hot=x_te_eval,
+                        one_hot_in_super=cfg.model.one_hot_in_super,
+                        gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
             
             losses_to_img(save_dir, f"log.txt", "full", "_full")
             losses_to_img(save_dir, f"log_super.txt", "sup", "_super")
@@ -855,8 +604,11 @@ if __name__ == '__main__':
             
             # MULTIVARIATE 
             # only on loss scale          
-            trues, samples = get_eval_samples(model.module, current_test_loader, mode_unnorm=mode_unnorm, norm_stats=None, input_mode = "xc", output_mode = "y", norm_method=None,
-                                              one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat), one_hot_in_super=cfg.model.one_hot_in_super)
+            trues, samples = get_eval_samples(model.module, test_loader_in, cfg, device,
+                                              mode_unnorm=mode_unnorm, norm_stats=None, input_mode="xc", output_mode="y",
+                                              one_hot_dim=one_hot_dim, conv=(cfg.model.conv or cfg.model.conv_concat),
+                                              one_hot_in_super=cfg.model.one_hot_in_super,
+                                              gcm_dict=gcm_dict, rcm_dict=rcm_dict, gcm_list=gcm_list, rcm_list=rcm_list)
             for i in range(len(cfg.data.variables)):
                 plot_rh(trues[:, i, :, :], samples[:, i, :, :, :], epoch_idx, save_dir, file_suffix=f"_full-model-var-{cfg.data.variables[i]}")
             

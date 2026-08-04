@@ -2,3 +2,5 @@ __pycache__/*
 results/*
 to_dos.md
 *_test.sh
+*.pyc
+settings.json

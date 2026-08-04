@@ -1,161 +1,18 @@
+from data_v2 import get_data_v2
 import torch
 import os
 import random
+import time
 import matplotlib.pyplot as plt
-from torchvision.utils import make_grid
 from modules import StoUNet, LinearModel, MultipleStoUNetWrapper, MeanResidualWrapper
 from loss_func import energy_loss_two_sample, norm_loss_multivariate_summed
 
-from data import get_data_2step_naive_avg
 import argparse
-from load_config import load_config
+import load_config_v2
 from utils import *
 import sys
 import pdb
 sys.path.append("..")
-
-
-def visual_sample(model, x, y, save_dir, cfg, norm_method=None, norm_stats=None,sqrt_transform=True, square_data=False, mode_unnorm = "hr", logit=False, xc_prev=None):
-    model.eval()
-    with torch.no_grad():
-        if xc_prev is None:
-            gen = model(x.view(x.shape[0], -1))
-            gen2 = model(x.view(x.shape[0], -1))
-        else:
-            gen = model(torch.cat([x.view(x.shape[0], -1), xc_prev.view(xc_prev.shape[0], -1)], dim=1))
-            gen2 = model(torch.cat([x.view(x.shape[0], -1), xc_prev.view(xc_prev.shape[0], -1)], dim=1))
-    model.train()
-    for i in range(len(cfg.data.variables)):
-        if len(gen.shape) == 3:
-            gen_var = gen[:, i, :]
-            gen_var2 = gen2[:, i, :]
-        else:
-            dim_per_var = gen.size(1) // len(cfg.data.variables)
-            gen_var = gen[:, i * dim_per_var:(i + 1) * dim_per_var]
-            gen_var2 = gen2[:, i * dim_per_var:(i + 1) * dim_per_var]
-            
-        if len(y.shape) == 3:
-            y_var = y[:, i, :]
-        else:
-            dim_per_var = gen.size(1) // len(cfg.data.variables)
-            y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-        
-        if norm_stats is not None:
-            norm_stats_var = norm_stats[cfg.data.variables[i]]
-        else:
-            norm_stats_var = None
-        gen_var = unnormalise(gen_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
-                    final_square=square_data, logit=logit).unsqueeze(1)
-        gen_var2 = unnormalise(gen_var2, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var,
-                    final_square=square_data, logit=logit).unsqueeze(1) 
-        y_var = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=sqrt_transform, norm_method=norm_method, norm_stats=norm_stats_var, 
-                           final_square=square_data, logit=logit).unsqueeze(1)
-        
-        if save_dir.endswith("_super"):
-            # upsample input sample to match size of output
-            s1_low = 128 / cfg.data.kernel_size_lr
-            s2_low = 128 / cfg.data.kernel_size_lr
-            s1 = 128
-            s2 = 128
-            x_ups = torch.nn.functional.interpolate(x.view(x.shape[0], int(s1_low), int(s2_low)).unsqueeze(1), size=(s1, s2), mode='nearest') # upsample again to keep size
-            sample = torch.cat([x_ups.cpu(), y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
-        else:
-            sample = torch.cat([y_var.cpu(), gen_var.cpu(), gen_var2.cpu()])
-        
-        sample = torch.clamp(sample, torch.quantile(y_var, 0.0005).item(), torch.quantile(y_var, 0.9995).item())
-        plt.matshow(make_grid(sample, nrow=y.shape[0]).permute(1, 2, 0)[:,:,0], cmap="rainbow"); plt.axis('off'); 
-        plt.savefig(save_dir + f"_var-{cfg.data.variables[i]}.png", bbox_inches="tight", pad_inches=0, dpi=300); plt.close()
-        # save_image(sample, save_dir, normalize=True, scale_each=True)
-
-def get_eval_samples(current_model, current_test_loader, cfg, mode_unnorm="hr", norm_method=None, norm_stats=None, input_mode = "x", output_mode = "y", logit=False, temporal=False):
-    current_model.eval()
-    samples = []
-    trues = []
-    with torch.no_grad():
-        n_batches = 0
-        for data_te in current_test_loader:
-            if temporal:
-                x_te_prev, xc_te_prev, y_te_prev, x_te, xc_te, y_te = data_te
-                x_te_prev, xc_te_prev, y_te_prev, x_te, xc_te, y_te = x_te_prev.to(device), xc_te_prev.to(device), y_te_prev.to(device), x_te.to(device), xc_te.to(device), y_te.to(device)
-            else:
-                x_te, xc_te, y_te = data_te
-                x_te, xc_te, y_te = x_te.to(device), xc_te.to(device), y_te.to(device)
-            x_te = x_te.view(x_te.shape[0], -1)
-            
-            if temporal:
-                assert input_mode == "x"
-                gen = current_model.sample(torch.cat([x_te, xc_te_prev.view(xc_te_prev.shape[0], -1)], dim=1), sample_size=5)
-            else:
-                if input_mode == "x":
-                    gen = current_model.sample(x_te, sample_size=5)
-                elif input_mode == "xc":
-                    gen = current_model.sample(xc_te, sample_size=5)
-                
-            try:                
-                gen_raw_allvars_list = []
-                for i in range(len(cfg.data.variables)):
-                    
-                    if norm_stats is not None:
-                        norm_stats_var = norm_stats[cfg.data.variables[i]]
-                    else:
-                        norm_stats_var = None
-                    
-                    gen_raw_var_list = []
-                    for j in range(5):
-                        if len(gen.shape) == 4: # 
-                            gen_var_sample = gen[:, i, :, j]
-                        elif len(gen.shape) == 3:
-                            dim_per_var = gen.size(1) // len(cfg.data.variables)
-                            gen_var_sample = gen[:, i * dim_per_var:(i + 1) * dim_per_var, j]
-                        gen_raw = unnormalise(gen_var_sample, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                            norm_method=norm_method, norm_stats=norm_stats_var, sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                            logit=logit)
-                        gen_raw_var_list.append(gen_raw)
-                        
-                    gen_raw_var = torch.stack(gen_raw_var_list, dim=-1)
-                    gen_raw_allvars_list.append(gen_raw_var)
-                gen_raw_allvars = torch.stack(gen_raw_allvars_list, dim=1)        
-                
-            except RuntimeError:
-                pdb.set_trace()
-
-            if output_mode == "y":
-                y = y_te
-            elif output_mode == "xc":
-                y = xc_te
-                
-            try:
-                y_te_raw_allvars_list = []
-                for i in range(len(cfg.data.variables)):
-                    
-                    if norm_stats is not None:
-                        norm_stats_var = norm_stats[cfg.data.variables[i]]
-                    else:
-                        norm_stats_var = None
-                    
-                    if len(y.shape) == 3:
-                        y_var = y[:, i, :]
-                    elif len(y.shape) == 2:
-                        dim_per_var = y.size(1) // len(cfg.data.variables)
-                        y_var = y[:, i * dim_per_var:(i + 1) * dim_per_var]
-                    y_te_raw = unnormalise(y_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                        norm_method=norm_method, norm_stats=norm_stats_var, logit=logit)
-                    y_te_raw_allvars_list.append(y_te_raw)
-                y_te_raw_allvars = torch.stack(y_te_raw_allvars_list, dim=1)
-                
-            except RuntimeError:
-                pdb.set_trace()
-            samples.append(gen_raw_allvars)
-            trues.append(y_te_raw_allvars)
-            n_batches += 1
-            if n_batches > 2:
-                break
-    current_model.train()
-    samples = torch.cat(samples, dim=0)
-    trues = torch.cat(trues, dim=0)
-    
-    return trues, samples
-            
 
 def plot_rh(trues, samples, epoch_idx, save_dir, file_suffix = ""):
     # plot RH spatial max
@@ -182,7 +39,7 @@ if __name__ == '__main__':
         return parser.parse_args()
 
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config_v2.load_config_v2(args.config)
     
     random.seed(cfg.general.seed)
     torch.manual_seed(cfg.general.seed)
@@ -190,26 +47,12 @@ if __name__ == '__main__':
     
     device = torch.device('cuda')
     
-    if cfg.general.server == "euler":
-        prefix = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/"
-    elif cfg.general.server == "ada":
-        prefix = "results/eng_2step/"
-    
     variables_str = '_'.join(cfg.data.variables)
-    
-    if cfg.model.method == 'eng_2step':
-        # save_dir = f"results/coarse/var-{cfg.data.variables[0]}{cfg.model.method}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}_models-{''.join(map(str, cfg.data.run_indices))}{cfg.general.save_name}/"
-        if cfg.data.kernel_size_lr == 16:
-            # save_dir = prefix + f"coarse/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}{cfg.general.save_name}/"
-            save_dir = prefix + f"coarse/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
-        else:
-            save_dir = prefix + f"coarse/kernel-{cfg.data.kernel_size_lr}/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}{cfg.general.save_name}/"
-    elif cfg.model.method == 'nn_det' or cfg.model.method == "residual" or cfg.model.method == "residual_from_mean":
-        save_dir = prefix + f"coarse/{cfg.model.method}/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}{cfg.general.save_name}/"
-    elif cfg.model.method == 'linear':
-        save_dir = prefix + f"coarse/var-{variables_str}/{cfg.model.method}/sqrt-{cfg.preprocessing.sqrt_transform_out}_models-{''.join(map(str, cfg.data.run_indices))}{cfg.general.save_name}/"
-    elif cfg.model.method == 'eng_temporal':
-        save_dir = prefix + f"coarse_temporal/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_norm-out-{cfg.preprocessing.norm_method_output}{cfg.general.save_name}/"
+
+    if cfg.model.method == 'eng_temporal':
+        save_dir = build_save_dir(cfg, variables_str, stage="coarse_temporal")
+    else:
+        save_dir = build_save_dir(cfg, variables_str, stage="coarse")
     make_folder(save_dir)
     write_config_to_file(cfg, save_dir)
     
@@ -237,31 +80,17 @@ if __name__ == '__main__':
     # RSDS
     log_file_name_rsds = os.path.join(save_dir, 'log_rsds.txt')
     log_file_rsds = open_log_file(log_file_name_rsds)
+
+    log_file_name_time = os.path.join(save_dir, 'log_time.txt')
+    log_file_time = open_log_file(log_file_name_time)
     
     #### load data
     if cfg.model.method == "eng_temporal":
         return_timepair = True
     else:
         return_timepair = False
-    train_loader, test_loader_in = get_data_2step_naive_avg(
-                                            run_indices=cfg.data.run_indices,
-                                            n_models=cfg.data.n_models, 
-                                            variables=cfg.data.variables, variables_lr=cfg.data.variables_lr,
-                                            batch_size=cfg.training.batch_size,
-                                            norm_input=cfg.preprocessing.norm_method_input, norm_output=cfg.preprocessing.norm_method_output,
-                                            sqrt_transform_in=cfg.preprocessing.sqrt_transform_in, sqrt_transform_out=cfg.preprocessing.sqrt_transform_out,
-                                            kernel_size=cfg.data.kernel_size_lr, mask_gcm=cfg.data.mask_gcm,
-                                            joint_one_hot=cfg.model.split_coarse_model,
-                                            ignore_one_hot_gcm=cfg.data.ignore_one_hot_gcm,
-                                            ignore_one_hot_rcm=cfg.data.ignore_one_hot_rcm,
-                                            tr_te_split=cfg.data.tr_te_split, 
-                                            test_size=1-cfg.data.tr_te_split_ratio,
-                                            logit=cfg.preprocessing.logit_transform,
-                                            normal=cfg.preprocessing.normal_transform,
-                                            only_winter=cfg.data.only_winter,
-                                            server=cfg.general.server,
-                                            return_timepair=return_timepair,
-                                            precip_zeros=cfg.data.precip_zeros)
+    
+    train_loader, test_loader_in = get_data_v2(cfg, validation_size=0.1, shuffle=True)
     print('#training batches:', len(train_loader))
     
     if cfg.model.method == "eng_temporal":
@@ -347,6 +176,23 @@ if __name__ == '__main__':
         
 
     #### build model
+    scheme = get_ensemble_encoding_scheme(cfg)
+    gcm_dict = {}
+    rcm_dict = {}
+    if scheme in {"gcm", "rcm", "gcm+rcm"}:
+        if getattr(cfg.data, "type", "") != "cordex_ensemble":
+            raise ValueError("Ensemble encoding requires data.type='cordex_ensemble'.")
+        root_for_combinations = getattr(cfg.data.cordex, "root", None) or cfg.data.data_dir
+        _, _, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root_for_combinations)
+
+    if scheme == "gcm":
+        one_hot_dim = len(gcm_dict)
+    elif scheme == "rcm":
+        one_hot_dim = len(rcm_dict)
+    elif scheme == "gcm+rcm":
+        one_hot_dim = len(gcm_dict) + len(rcm_dict)
+    else:
+        one_hot_dim = 0
     if cfg.model.method == 'eng_2step' or cfg.model.method == 'eng_temporal':
         if cfg.data.variables_lr is not None:
             n_vars = len(cfg.data.variables_lr)
@@ -387,7 +233,7 @@ if __name__ == '__main__':
                                         preproc_layer=cfg.model.preproc_layer,
                                         input_dims_for_preproc=np.array(
                                             [720  for k in range(n_vars)] +
-                                            [5, 7] +
+                                            [5, one_hot_dim] +
                                             [interm_dim_per_var for k in range(len(cfg.data.variables))]),
                                         preproc_dim=cfg.model.preproc_dim, layer_shrinkage=cfg.model.layer_shrinkage).to(device)
             else:
@@ -396,7 +242,7 @@ if __name__ == '__main__':
                         preproc_layer=cfg.model.preproc_layer,
                         input_dims_for_preproc=np.array(
                             [720  for k in range(n_vars)] +
-                            [5, 7]),
+                            [5, one_hot_dim]),
                         preproc_dim=cfg.model.preproc_dim, layer_shrinkage=cfg.model.layer_shrinkage).to(device)
         
         optimizer_coarse = torch.optim.Adam(model.parameters(), lr=cfg.training.lr)
@@ -484,7 +330,7 @@ if __name__ == '__main__':
             print(f'Built a model with #params: {count_parameters(model)}')            
     
         else:
-            save_dir_nn_det = prefix + f"coarse/nn_det/var-{variables_str}/hd-{cfg.model.hidden_dim}_num-lay-{cfg.model.num_layer}_sqrt-{cfg.preprocessing.sqrt_transform_out}_out-act-{cfg.model.out_act}_lay-shr{cfg.model.layer_shrinkage}{cfg.general.save_name}/"
+            save_dir_nn_det = build_save_dir(cfg, variables_str, stage="coarse", method="nn_det")
             ckpt_dir = save_dir_nn_det + f"model_{cfg.training.burn_in}.pt"
             model.mean_model.load_state_dict(torch.load(ckpt_dir))
             
@@ -511,6 +357,7 @@ if __name__ == '__main__':
     # ----------- START TRAIN ------------------
     mse = torch.nn.MSELoss()
     for epoch_idx in range(cfg.general.resume_epoch, cfg.training.num_epochs):
+        start_time_epoch = time.time()
         if epoch_idx == cfg.general.resume_epoch:
             print('Training has started!')
         
@@ -579,8 +426,35 @@ if __name__ == '__main__':
                 
             #lossnp, lossnn, lossrp, lossrn = norm_loss(xc, x_coarse, x_coarse_p, p_norm_loss_loc=cfg.loss.p_norm_loss_loc, p_norm_loss_batch=cfg.loss.p_norm_loss_batch, 
             #                                            beta_norm_loss=cfg.loss.beta_norm_loss, agg_norm_loss=cfg.loss.agg_norm_loss)            
-            lossnp, lossnn = norm_loss_multivariate_summed(xc, x_coarse, x_coarse_p, cfg.loss.p_norm_loss_loc, beta_norm_loss=cfg.loss.beta_norm_loss, type = "loc", agg_norm_loss="mean", n_vars = len(cfg.data.variables))
-            lossrn, lossrp = norm_loss_multivariate_summed(xc, x_coarse, x_coarse_p, cfg.loss.p_norm_loss_batch, beta_norm_loss=cfg.loss.beta_norm_loss, type = "batch", agg_norm_loss=cfg.loss.agg_norm_loss, n_vars = len(cfg.data.variables))
+            if cfg.loss.p_norm_loss_loc is not None:
+                lossnp, lossnn = norm_loss_multivariate_summed(
+                    xc,
+                    x_coarse,
+                    x_coarse_p,
+                    cfg.loss.p_norm_loss_loc,
+                    beta_norm_loss=cfg.loss.beta_norm_loss,
+                    type="loc",
+                    agg_norm_loss="mean",
+                    n_vars=len(cfg.data.variables),
+                )
+            else:
+                lossnp = torch.zeros((), device=xc.device, dtype=xc.dtype)
+                lossnn = torch.zeros((), device=xc.device, dtype=xc.dtype)
+
+            if cfg.loss.p_norm_loss_batch is not None:
+                lossrn, lossrp = norm_loss_multivariate_summed(
+                    xc,
+                    x_coarse,
+                    x_coarse_p,
+                    cfg.loss.p_norm_loss_batch,
+                    beta_norm_loss=cfg.loss.beta_norm_loss,
+                    type="batch",
+                    agg_norm_loss=cfg.loss.agg_norm_loss,
+                    n_vars=len(cfg.data.variables),
+                )
+            else:
+                lossrn = torch.zeros((), device=xc.device, dtype=xc.dtype)
+                lossrp = torch.zeros((), device=xc.device, dtype=xc.dtype)
             
             if cfg.loss.norm_loss_loc:
                 # old version without weighting
@@ -642,21 +516,21 @@ if __name__ == '__main__':
                                 gen1_var = x_coarse[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 gen2_var = x_coarse_p[:, i * dim_per_var:(i + 1) * dim_per_var]
                                 
-                                y_raw = unnormalise(xc_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]],
-                                                    logit=cfg.preprocessing.logit_transform)
-                                gen1_raw = unnormalise(gen1_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                    logit=cfg.preprocessing.logit_transform)
-                                gen2_raw = unnormalise(gen2_var, mode=mode_unnorm, data_type=cfg.data.variables[i], sqrt_transform=cfg.preprocessing.sqrt_transform_out, 
-                                                    norm_method=cfg.preprocessing.norm_method_output, norm_stats=norm_stats[cfg.data.variables[i]], sep_mean_std=cfg.preprocessing.sep_mean_std,
-                                                    logit=cfg.preprocessing.logit_transform)
+                                s1, s2 = get_spatial_dims_from_mode(mode_unnorm)
+                                y_raw = unnormalise(xc_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                                gen1_raw = unnormalise(gen1_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
+                                gen2_raw = unnormalise(gen2_var, var=cfg.data.variables[i], mode=mode_unnorm, s1=s1, s2=s2, cfg=cfg.data.preprocessing, norm_stats=norm_stats[cfg.data.variables[i]])
                                 
                                 # for simplicity, sum across variables
                                 loss_raw, s1_raw, s2_raw = energy_loss_two_sample(y_raw, gen1_raw, gen2_raw, verbose=True, beta=cfg.loss.beta)
                                 loss_tr_raw += loss_raw.item()
                                 s1_tr_raw += s1_raw.item()
                                 s2_tr_raw += s2_raw.item()
+
+                    end_time_epoch = time.time()
+                    log_time = f"epoch took: {end_time_epoch - start_time_epoch}"
+                    log_file_time.write(log_time + '\n')
+                    log_file_time.flush()
             
         if (epoch_idx == 0 or (epoch_idx + 1) % cfg.general.print_every_nepoch == 0):
             log = f'Train [Epoch {epoch_idx + 1}]    \tloss: {loss_tr / n_batches:.4f}, s1: {s1_tr / n_batches:.4f}, s2: {s2_tr / n_batches:.4f}'
@@ -821,16 +695,46 @@ if __name__ == '__main__':
                 temporal = False
 
             if cfg.model.method == "residual":
-                visual_sample(model.mean_model, x_tr_eval, xc_tr_eval, cfg=cfg, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_coarse-mean_loss-scale', norm_method=None, norm_stats=None, 
-                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=False)
-                visual_sample(model.mean_model, x_te_eval, xc_te_eval, cfg=cfg, save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse-mean_loss-scale', norm_method=None, norm_stats=None,
-                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=False)
+                visual_sample(
+                    model.mean_model,
+                    x_tr_eval,
+                    xc_tr_eval,
+                    cfg=cfg,
+                    save_dir=save_dir + f'img_{epoch_idx + 1}_tr_coarse-mean_loss-scale',
+                    norm_stats=None,
+                    mode_unnorm=mode_unnorm,
+                )
+                visual_sample(
+                    model.mean_model,
+                    x_te_eval,
+                    xc_te_eval,
+                    cfg=cfg,
+                    save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse-mean_loss-scale',
+                    norm_stats=None,
+                    mode_unnorm=mode_unnorm,
+                )
 
             # coarse model, transformed scale
-            visual_sample(model, x_tr_eval, xc_tr_eval, cfg=cfg, save_dir=save_dir + f'img_{epoch_idx + 1}_tr_coarse_loss-scale', norm_method=None, norm_stats=None, 
-                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=False, xc_prev=xc_prev_tr)
-            visual_sample(model, x_te_eval, xc_te_eval, cfg=cfg, save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse_loss-scale', norm_method=None, norm_stats=None,
-                    square_data=False, sqrt_transform=cfg.preprocessing.sqrt_transform_out, mode_unnorm = mode_unnorm, logit=False, xc_prev=xc_prev_te)
+            visual_sample(
+                model,
+                x_tr_eval,
+                xc_tr_eval,
+                cfg=cfg,
+                save_dir=save_dir + f'img_{epoch_idx + 1}_tr_coarse_loss-scale',
+                norm_stats=None,
+                mode_unnorm=mode_unnorm,
+                xc_prev=xc_prev_tr,
+            )
+            visual_sample(
+                model,
+                x_te_eval,
+                xc_te_eval,
+                cfg=cfg,
+                save_dir=save_dir + f'img_{epoch_idx + 1}_te_coarse_loss-scale',
+                norm_stats=None,
+                mode_unnorm=mode_unnorm,
+                xc_prev=xc_prev_te,
+            )
 
             losses_to_img(save_dir, f"log_coarse.txt", "crs", "_coarse")
 
@@ -838,7 +742,18 @@ if __name__ == '__main__':
             # MULTIVARIATE 
             # only on loss scale         
  
-            trues, samples = get_eval_samples(model, current_test_loader, cfg, mode_unnorm=mode_unnorm, norm_stats=None, input_mode = "x", output_mode = "xc", norm_method=None, temporal=temporal)
+            trues, samples = get_eval_samples(
+                model,
+                test_loader_in,
+                cfg,
+                device,
+                mode_unnorm=mode_unnorm,
+                norm_stats=None,
+                input_mode="x",
+                output_mode="xc",
+                temporal=temporal,
+                temporal_concat_input=temporal,
+            )
             for i in range(len(cfg.data.variables)):
                 plot_rh(trues[:, i, :, :], samples[:, i, :, :, :], epoch_idx, save_dir, file_suffix=f"_coarse-var-{cfg.data.variables[i]}")
                 

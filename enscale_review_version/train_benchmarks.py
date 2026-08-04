@@ -6,12 +6,11 @@ from torchvision.utils import make_grid
 from modules import StoUNet, RankValModel, LinearModel, MultivariateStoUNetWrapper, StoUNetNoiseEnd
 from loss_func import energy_loss_two_sample, energy_loss_rk_val_wrapper, ridge_loss, crps_pixelwise
 
-from enscale.archive.data_old import get_data, get_data_2step_naive_avg
-from enscale.archive.config import get_config
+from data import get_data, get_data_2step_naive_avg
+from config import get_config
 from utils import *
 import sys
 import pdb
-from types import SimpleNamespace
 sys.path.append("..")
 
     
@@ -54,47 +53,13 @@ if __name__ == '__main__':
     
     device = torch.device('cuda')
     
+    if args.server == "euler":
+        prefix = "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results/"
+    elif args.server == "ada":
+        prefix = "results/"
+    
     variables_str = '_'.join(args.variables)
-    cfg_for_save_dir = SimpleNamespace(
-        general=SimpleNamespace(
-            server=args.server,
-            save_name=args.save_name,
-            save_dir_root_local="results",
-            save_dir_root_server="/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results",
-            save_dir_pattern=getattr(
-                args,
-                "save_dir_pattern",
-                "{method}/var-{variables}/hidden{hidden_dim}_norm-in-{norm_method_input}_norm-out-{norm_method_output}{save_name}/",
-            ),
-        ),
-        model=SimpleNamespace(
-            method=args.method,
-            hidden_dim=args.hidden_dim,
-            num_layer=getattr(args, "num_layer", 0),
-            layer_shrinkage=getattr(args, "layer_shrinkage", 0),
-            conv=getattr(args, "conv", False),
-            conv_concat=getattr(args, "conv_concat", False),
-            conv_dim=getattr(args, "conv_dim", 0),
-            nicolai_layers=getattr(args, "nicolai_layers", False),
-        ),
-        loss=SimpleNamespace(avg_constraint=getattr(args, "avg_constraint", False)),
-        data=SimpleNamespace(
-            preprocessing=SimpleNamespace(
-                norm_method_output=args.norm_method_output,
-                norm_method_input=args.norm_method_input,
-            ),
-            kernel_size_lr=getattr(args, "kernel_size_lr", 16),
-            kernel_size_hr=getattr(args, "kernel_size_hr", 1),
-            run_indices=getattr(args, "run_indices", None),
-        ),
-        preprocessing=SimpleNamespace(sqrt_transform_out=getattr(args, "sqrt_transform_out", False)),
-        sparse_layers=SimpleNamespace(
-            num_neighbors_res=getattr(args, "num_neighbors_res", ""),
-            num_neighbors_ups=getattr(args, "num_neighbors_ups", ""),
-            latent_dim=getattr(args, "latent_dim", ""),
-        ),
-    )
-    save_dir = build_save_dir(cfg_for_save_dir, variables_str)
+    save_dir = prefix + f"{args.method}/var-{variables_str}/hidden{args.hidden_dim}_norm-in-{args.norm_method_input}_norm-out-{args.norm_method_output}{args.save_name}/"
     make_folder(save_dir)
     write_config_to_file(args, save_dir)
     
@@ -149,8 +114,10 @@ if __name__ == '__main__':
     #### get norm stats file
     norm_stats = {}
     for i in range(len(args.variables)):
-
-        mode_unnorm = "hr"
+        if args.predict_lr:
+            mode_unnorm = "lr"
+        else:
+            mode_unnorm = "hr"
         if args.variables[i] in ["pr", "sfcWind"] and args.sqrt_transform_out:
             name_str = "_sqrt"
         else:
@@ -173,7 +140,10 @@ if __name__ == '__main__':
         if args.variables_lr is not None:
             n_vars = len(args.variables_lr)
         else:
-            n_vars = 5
+            if args.coarsened_hr:
+                n_vars = 2
+            else:
+                n_vars = 5
         if args.norm_method_output != "rank_val":
             in_dim = x_tr_eval.shape[1]
             out_dim = y_tr_eval.shape[-2] * y_tr_eval.shape[-1]
