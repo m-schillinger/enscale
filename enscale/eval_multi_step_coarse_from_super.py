@@ -3,7 +3,7 @@ from modules import *
 from modules_cnn import *
 from modules_loc_variant import *
 from utils import *
-from enscale.data_old import *
+from enscale.archive.data_old import *
 import argparse
 import pdb
 import time

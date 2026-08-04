@@ -1,0 +1,96 @@
+inherits_from: "config_train_v2_example.yaml"
+
+# Example hierarchical inference config for eval_hierarchical_v2.py.
+# This file demonstrates the staged schema and split/submode data selection.
+
+inference:
+  hierarchical: true
+  output_subdir: "hierarchical_eval_v2_example"
+  sample_size: 9
+
+  # Data selection for inference loader.
+  split: test
+  submode: interpolation_2030s
+  batch_size: 512
+
+  # Keep legacy fields for compatibility with existing tooling.
+  checkpoint_source: train_output
+  train_run_dir: "results/eng_2step/super/lr16_hr8/var-tas_pr_sfcWind_rsds/example_run/"
+
+  data_modes:
+    test:
+      default:
+        folder: "test/default"
+        file_suffix: ""
+      submodes:
+        interpolation_2030s:
+          folder: "test/interpolation"
+          file_suffix: "_2030-2039"
+        extrapolation_2090s:
+          folder: "test/extrapolation"
+          file_suffix: "_2090-2099"
+    inference:
+      default:
+        folder: "inference/default"
+        file_suffix: ""
+      submodes:
+        new_region_a:
+          folder: "inference/new_region_a"
+          file_suffix: ""
+
+  # Ordered stage chain (coarse + super-resolution cascade).
+  # config_path is resolved relative to this YAML file.
+  stages:
+    - name: coarse_16
+      stage: coarse
+      config_path: "config_train_v2_example.yaml"
+      checkpoint_source: train_output
+      epoch: 199
+      vars_as_channels: false
+      use_one_hot: false
+      one_hot_option: concat
+      noise_dim: 640
+
+    - name: super_16_to_8
+      stage: super
+      subfolder: "lr16_hr8"
+      config_path: "config_train_v2_example.yaml"
+      checkpoint_source: train_output
+      epoch: 199
+      vars_as_channels: false
+      use_one_hot: true
+      one_hot_option: argument
+      noise_dim: 320
+
+    - name: super_8_to_4
+      stage: super
+      subfolder: "lr8_hr4"
+      config_path: "config_train_v2_example.yaml"
+      checkpoint_source: train_output
+      epoch: 199
+      vars_as_channels: false
+      use_one_hot: true
+      one_hot_option: argument
+      noise_dim: 80
+
+    - name: super_4_to_2
+      stage: super
+      subfolder: "lr4_hr2"
+      config_path: "config_train_v2_example.yaml"
+      checkpoint_source: train_output
+      epoch: 199
+      vars_as_channels: false
+      use_one_hot: true
+      one_hot_option: argument
+      noise_dim: 20
+
+    - name: super_2_to_1
+      stage: super
+      subfolder: "lr2_hr1"
+      config_path: "config_train_v2_example.yaml"
+      checkpoint_source: train_output
+      epoch: 99
+      vars_as_channels: false
+      use_one_hot: true
+      one_hot_option: argument
+      noise_dim: 5
