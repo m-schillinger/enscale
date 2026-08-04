@@ -57,4 +57,4 @@ Both environments yield identical results (up to numerical noise).
 
 ## Folder enscale_review_version
 
-Backup of copy code which was used to create the 
+Backup of copy code which was used to create the published version of EnScale. Less general than the code in `enscale`.
