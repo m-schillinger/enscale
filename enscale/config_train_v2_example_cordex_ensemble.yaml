@@ -1,0 +1,44 @@
+general:
+  save_name: "_v2_train_template_cordex"
+
+data:
+  type: cordex_ensemble
+  variables: ["tas", "pr", "sfcWind", "rsds"]
+  variables_lr: ["pr"]
+  kernel_size_lr: 16
+  kernel_size_hr: 8
+  return_timepair: false
+
+  cordex:
+    root: "/path/to/cordex-root"
+    lr_pattern: "{root}/{folder}/{var}_day_{gcm}_{variant}_rcp85_EUROPE_g025{file_suffix}{var_suffix}.nc"
+    hr_pattern: "{root}/{folder}/{var}_day_EUR-11_{rcm}_{gcm}_{variant}_rcp85_ALPS_cordexgrid{file_suffix}{var_suffix}.nc"
+
+  train:
+    folder_lr: "train"
+    folder_hr: "train"
+    file_suffix: ""
+
+  validation:
+    folder: "valid"
+    file_suffix: ""
+
+  runs:
+    selection: first_n
+    n_models: 1
+
+  ensemble_encoding:
+    enabled: false
+    scheme: gcm+rcm
+
+  # Optional variable-specific filename suffixes.
+  lr_var_suffix_default: ""
+  hr_var_suffix_default: ""
+  lr_var_suffix_by_var: {}
+  hr_var_suffix_by_var: {}
+
+  preprocessing:
+    norm_method_input: "normalise_scalar"
+    norm_method_output: "normalise_scalar"
+    use_pre_normalized_lr: false
+    use_pre_normalized_hr: false

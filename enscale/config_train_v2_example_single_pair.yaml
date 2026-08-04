@@ -1,0 +1,38 @@
+general:
+  save_name: "_v2_train_template_single_pair"
+
+data:
+  type: single_pair
+  variables: ["tas", "pr"]
+  variables_lr: ["tas", "pr"]
+  kernel_size_lr: 1
+  kernel_size_hr: 1
+  return_timepair: false
+
+  # Option A: one LR/HR file used for all variables.
+  single_pair:
+    lr_file: "/path/to/lr_inputs.nc"
+    hr_file: "/path/to/hr_targets.nc"
+
+    # Option B: per-variable files (override the defaults above).
+    # lr_files:
+    #   tas: "/path/to/tas_lr.nc"
+    #   pr: "/path/to/pr_lr.nc"
+    # hr_files:
+    #   tas: "/path/to/tas_hr.nc"
+    #   pr: "/path/to/pr_hr.nc"
+
+  train:
+    folder: ""
+    file_suffix: ""
+
+  validation:
+    folder: ""
+    file_suffix: ""
+
+  preprocessing:
+    # Use "none" if files are already normalized in model-ready space.
+    norm_method_input: "none"
+    norm_method_output: "none"
+    use_pre_normalized_lr: true
+    use_pre_normalized_hr: true

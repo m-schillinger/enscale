@@ -7,9 +7,26 @@ This repository contains implementations for the paper "EnScale: Temporally-cons
 
 Implementation of EnScale.
 
+### Used pre-trained EnScale model
+
 **Workflow**
-- train each step of EnScale separately (`train_only-super_multivariate.py` and `train_only-coarse.py`), example calls in `run_super.sh` and `run_coarse.sh`.
-- generate samples from EnScale with `eval_multi_step_coarse_from_super.py`, example call in `run_eval.sh`.
+
+- download checkpoints (**to do**)
+- download normalization statistics
+- create a config file for inference
+- generate samples from EnScale with `eval_hierarchical_v2.py`
+
+For more details, see `readme_enscale.md` in the folder `enscale`.
+
+### Re-train your own EnScale model
+
+**Workflow**
+- preprocess data to match the supported formats
+- (optional) compute statistics for standardization of the data
+- create config files, see examples 
+- train several steps of EnScale separately (`train_only-super_multivariate.py` and `train_only-coarse.py`, optionally `train_only-super_multivariate_temporal-v2.py`)
+- create a separate config file for inference
+- generate samples from EnScale with `eval_hierarchical_v2.py`
 - these can then be used in the evaluation scripts.
 
 For more details, see `readme_enscale.md` in the folder `enscale`.
@@ -28,6 +45,8 @@ Some metrics which are calculated in each grid point as well (for Fig. 9 & Fig. 
 
 Scripts / notebooks to generate plots in the paper. Uses outputs from the evaluation scripts.
 
+**Note:** Some plots from the most recent version of the paper are still missing.
+
 ## Folder conda
 
 Two .yml files for conda environments:
@@ -35,3 +54,7 @@ Two .yml files for conda environments:
 - environment_modern.yml: reduced package list with more recent python version, recommended for users
 
 Both environments yield identical results (up to numerical noise).
+
+## Folder enscale_review_version
+
+Backup of copy code which was used to create the 

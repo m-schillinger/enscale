@@ -1,0 +1,43 @@
+general:
+  save_name: "_v2_train_template_pattern"
+
+data:
+  type: pattern
+  variables: ["tas", "pr"]
+  variables_lr: ["tas", "pr"]
+  data_dir: "/path/to/data-root"
+  kernel_size_lr: 1
+  kernel_size_hr: 1
+  return_timepair: false
+
+  pattern:
+    # {root} resolves to data.data_dir.
+    lr_pattern: "{root}/{folder}/{var}_lr{file_suffix}{var_suffix}.nc"
+    hr_pattern: "{root}/{folder}/{var}_hr{file_suffix}{var_suffix}.nc"
+    allow_multi_file: true
+    concat_dim: "time"
+
+  train:
+    folder: "train"
+    file_suffix: ""
+
+  validation:
+    folder: "valid"
+    file_suffix: ""
+
+  # Optional suffix injection (if {var_suffix} is omitted in the pattern,
+  # suffix is inserted before the file extension automatically).
+  lr_var_suffix_default: ""
+  hr_var_suffix_default: ""
+  lr_var_suffix_by_var:
+    tas: ""
+    pr: ""
+  hr_var_suffix_by_var:
+    tas: ""
+    pr: ""
+
+  preprocessing:
+    norm_method_input: "normalise_scalar"
+    norm_method_output: "normalise_scalar"
+    use_pre_normalized_lr: false
+    use_pre_normalized_hr: false
