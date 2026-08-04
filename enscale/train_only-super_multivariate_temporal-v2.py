@@ -7,8 +7,8 @@ import torch
 
 from modules_loc_variant_temporal import RectUpsampleWithResidualsTemporal
 from loss_func import energy_loss_two_sample, energy_loss_multivariate_summed, norm_loss_multivariate_summed
-from data import get_data
-from load_config import load_config
+from data_v2 import get_data_v2
+import load_config_v2
 from utils import (
     make_folder,
     write_config_to_file,
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         return parser.parse_args()
 
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config_v2.load_config_v2(args.config)
     random.seed(cfg.general.seed)
     torch.manual_seed(cfg.general.seed)
     torch.cuda.manual_seed(cfg.general.seed)
@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
     gcm_list, rcm_list, gcm_dict, rcm_dict = get_rcm_gcm_combinations(root)
 
-    train_loader, test_loader_in = get_data(cfg, test_size=0.1, shuffle=True)
+    train_loader, test_loader_in = get_data_v2(cfg, validation_size=0.1, shuffle=True)
     print("#training batches:", len(train_loader))
 
     x_tr_eval_prev, xc_tr_eval_prev, y_tr_eval_prev, x_tr_eval, xc_tr_eval, y_tr_eval = next(iter(train_loader))

@@ -110,3 +110,56 @@ def test_load_train_and_inference_config_v2_merges_docs(tmp_path):
     assert cfg.inference.checkpoint_source == "train_output"
     assert cfg.inference.train_run_dir == "/tmp/run"
     assert cfg.inference.submode == "custom_a"
+
+
+def test_load_config_v2_resolves_hierarchical_stage_paths(tmp_path):
+    train_cfg = tmp_path / "train_stage.yaml"
+    infer_cfg = tmp_path / "hier_eval.yaml"
+
+    train_doc = {
+        "general": {"save_name": "stage"},
+        "data": {
+            "type": "pattern",
+            "variables": ["tas"],
+            "variables_lr": ["tas"],
+            "data_dir": "/tmp/data",
+            "pattern": {
+                "lr_pattern": "{root}/{folder}/{var}_lr{file_suffix}.nc",
+                "hr_pattern": "{root}/{folder}/{var}_hr{file_suffix}.nc",
+            },
+            "train": {"folder": "train", "file_suffix": ""},
+            "preprocessing": {
+                "norm_method_input": "none",
+                "norm_method_output": "none",
+            },
+        },
+        "inference": {
+            "checkpoint_source": "pretrained",
+            "pretrained_checkpoints": {"dummy": "/tmp/model.pt"},
+        },
+    }
+    train_cfg.write_text(yaml.safe_dump(train_doc))
+
+    infer_doc = {
+        "inherits_from": str(train_cfg),
+        "inference": {
+            "hierarchical": True,
+            "sample_size": 3,
+            "stages": [
+                {
+                    "name": "coarse",
+                    "stage": "coarse",
+                    "config_path": "train_stage.yaml",
+                    "checkpoint_source": "train_output",
+                    "epoch": 99,
+                }
+            ],
+        },
+    }
+    infer_cfg.write_text(yaml.safe_dump(infer_doc))
+
+    cfg = load_config_v2(str(infer_cfg))
+    assert cfg.inference.hierarchical is True
+    assert len(cfg.inference.stages) == 1
+    assert cfg.inference.stages[0].config_path == str(train_cfg.resolve())
+    assert cfg.inference.stages[0].epoch == 99
