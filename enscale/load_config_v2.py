@@ -48,6 +48,64 @@ def _load_v2_doc(path: str) -> Dict[str, Any]:
     return _load_yaml_with_inheritance(path)
 
 
+def _normalize_legacy_top_level_keys(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Map legacy top-level keys into structured sections expected by ConfigV2."""
+    out = deepcopy(doc)
+
+    general = out.get("general")
+    if general is None:
+        general = {}
+    if not isinstance(general, dict):
+        raise TypeError(f"Config section 'general' must be a mapping, got {type(general).__name__}")
+
+    legacy_general_keys = {
+        "save_dir_pattern",
+        "save_dir_root_local",
+        "save_dir_root_server",
+        "save_name",
+        "server",
+        "resume_epoch",
+        "n_visual",
+        "seed",
+        "print_every_nepoch",
+        "sample_every_nepoch",
+    }
+    for key in legacy_general_keys:
+        if key in out:
+            if key not in general:
+                general[key] = out[key]
+            del out[key]
+
+    out["general"] = general
+    return out
+
+
+def _build_config_v2_from_doc(doc: Dict[str, Any]) -> ConfigV2:
+    cfg = ConfigV2()
+    valid_sections = set(cfg.__dataclass_fields__.keys())
+
+    for section_name, section_values in doc.items():
+        if section_name not in valid_sections:
+            raise TypeError(f"Unknown v2 config section: {section_name}")
+
+        section = getattr(cfg, section_name)
+        section_cls = section.__class__
+
+        if section_values is None:
+            section_values = {}
+
+        if isinstance(section_values, section_cls):
+            setattr(cfg, section_name, section_values)
+        elif isinstance(section_values, dict):
+            setattr(cfg, section_name, section_cls(**section_values))
+        else:
+            raise TypeError(
+                f"Config section '{section_name}' must be a mapping, got {type(section_values).__name__}"
+            )
+
+    return cfg
+
+
 def _resolve_inference_stage_paths(doc: Dict[str, Any], config_path: str) -> Dict[str, Any]:
     out = deepcopy(doc)
     inference = out.get("inference")
@@ -78,16 +136,9 @@ def _resolve_inference_stage_paths(doc: Dict[str, Any], config_path: str) -> Dic
 
 
 def load_config_v2(path: str) -> ConfigV2:
-    d = _resolve_inference_stage_paths(_load_v2_doc(path), path)
+    d = _normalize_legacy_top_level_keys(_resolve_inference_stage_paths(_load_v2_doc(path), path))
 
-    cfg = ConfigV2()
-
-    for section_name, section_values in d.items():
-        if not hasattr(cfg, section_name):
-            raise TypeError(f"Unknown v2 config section: {section_name}")
-        section = getattr(cfg, section_name)
-        section_cls = section.__class__
-        setattr(cfg, section_name, section_cls(**(section_values or {})))
+    cfg = _build_config_v2_from_doc(d)
 
     if "preprocessing" in d:
         legacy = d.get("preprocessing") or {}
@@ -105,15 +156,9 @@ def load_train_and_inference_config_v2(train_path: str, inference_path: str) -> 
     train_doc = _load_v2_doc(train_path)
     inference_doc = _resolve_inference_stage_paths(_load_v2_doc(inference_path), inference_path)
 
-    merged = _deep_merge(train_doc, inference_doc)
+    merged = _normalize_legacy_top_level_keys(_deep_merge(train_doc, inference_doc))
 
-    cfg = ConfigV2()
-    for section_name, section_values in merged.items():
-        if not hasattr(cfg, section_name):
-            raise TypeError(f"Unknown v2 config section: {section_name}")
-        section = getattr(cfg, section_name)
-        section_cls = section.__class__
-        setattr(cfg, section_name, section_cls(**(section_values or {})))
+    cfg = _build_config_v2_from_doc(merged)
 
     cfg.preprocessing = cfg.data.preprocessing
     return cfg
