@@ -3,6 +3,8 @@ general:
   server: "ada"
   save_dir_root_local: "results"
   save_dir_root_server: "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results"
+  # Optional: override the default save-dir layout.
+  # save_dir_pattern: "coarse/var-{variables}/hd-{hidden_dim}_num-lay-{num_layer}_norm-out-{norm_method_output}{save_name}/"
 
 data:
   type: cordex_ensemble

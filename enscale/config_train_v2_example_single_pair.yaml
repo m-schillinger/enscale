@@ -1,5 +1,7 @@
 general:
   save_name: "_v2_train_template_single_pair"
+  # Optional: override the default save-dir layout.
+  # save_dir_pattern: "{method}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_norm-in-{norm_method_input}_norm-out-{norm_method_output}{save_name}/"
 
 data:
   type: single_pair

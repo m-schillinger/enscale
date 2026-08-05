@@ -8,20 +8,57 @@
     - rsds: W/m^2
     - sfcWind: m/s
     - psl: Pa
-- grid:  *to do: upload grid to zenodo*
+- grid: regular 2.5 degree lonlat grid (see Zenodo) *to do: upload grid to zenodo*
+- select region: Process with cdo -sellonlatbox,320,50,25,75 or select the equivalent region otherwise.
 
-Note: EnScale needs only all five variables.
+Note: EnScale currently needs only all five variables.
 
-*Missing here* Put in one folder?
+Put your predictors in a folder; for more details on dataloading, see below.
 
 ## Checkpoints and helpers
 
-Find checkpoints on Zenodo.
-In addition also on zenodo: Statistics for standardization. Download these and then adjust the path in the config file.
+- Find checkpoints on Zenodo. There are five checkpoints for the five stages of the EnScale framework.
+- In addition also on zenodo: Statistics for standardization. Download these and then adjust the path in the config file.
 
 ## Relevant files
 
-**Interpreting the output**
+- `eval_hierarchical.py`: File to actually create the predictions.
+- In the folder `configs_enscale_published`:
+    - `config_inference_hierarchical.yaml`: actual config for inference
+    - `config_train*`: train configs; these can be left untouched if only inference is done
+
+Adjust `config_inference_hierarchical.yaml` for your needs.
+- choose `test` or `inference` mode
+    - For `inference.split: test`, ground-truth HR targets are expected in the dataloader setup (for evaluation workflows).
+    - For `inference.split: inference`, the loader can run without HR targets; target placeholders are used internally and only model predictions are written.
+- put folder name / path to predictors in the 
+- optional: you can have several submodes for testing / inference (e.g. different periods / different model groups etc.)
+
+
+## Interpreting the output
+
+When running hierarchical inference (via `eval_hierarchical_v2.py`), predictions are saved as PyTorch tensors.
+
+Output location:
+- root is selected from config via `general.server`:
+    - `ada` -> `general.save_dir_root_local`
+    - `euler` -> `general.save_dir_root_server`
+- final output directory is:
+    - `{root}/{inference.output_subdir}/{inference.split}/{inference.submode_or_default}/`
+    - where `inference.submode_or_default` is the selected submode, or `default` if none is set.
+
+Saved files:
+- `manifest.pt`: metadata dictionary with run info, selected split/submode, sample size, and resolved checkpoint paths per stage.
+- `run_idx{K}.pt`: predictions for run index `K` (one file per selected run).
+
+Prediction tensor format (`run_idx{K}.pt`):
+- shape: `[N, V, P, S]`
+    - `N`: number of timesteps/samples in the selected dataset split
+    - `V`: number of target variables (`len(data.variables)`)
+    - `P`: number of HR pixels per variable (flattened spatial dimension)
+    - `S`: number of stochastic samples (`inference.sample_size`)
+- values are saved after unnormalization, in physical units.
+
 
 ## Potential caveats
 - The current ECDF transform only generates data within the range of the used training data. 
@@ -223,8 +260,10 @@ Supported options in `compute_uniform_prenorm_data.py`:
 
 ### EnScale training
 
-In the paper, the EnScale framework consists of several steps. *Currently, you need a separate config file for each step.*
+In the paper, the EnScale framework consists of several steps. *Currently, you need a separate config file for each step.* 
 
+- The config files for the several super-resolution steps can be identical up to the kernel size parameters (kernel_size_lr, kernel_size_hr).
+- But for full flexibility, we still keep the config files separately, in case one wants to adjust hyperparameters for each stage. E.g. often a smaller batch size is needed for later stages due to larger memory constraints, and later models converge after fewer epochs already.
 
 ### Notes on config parameters
 

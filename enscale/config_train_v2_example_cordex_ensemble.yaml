@@ -1,5 +1,7 @@
 general:
   save_name: "_v2_train_template_cordex"
+  # Optional: override the default save-dir layout.
+  # save_dir_pattern: "{method}/super/{subfolder}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_layer-shr-{layer_shrinkage}_avc-c-{avg_constraint}_norm-out-{norm_method_output}{save_name}/"
 
 data:
   type: cordex_ensemble

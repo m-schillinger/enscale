@@ -1,17 +1,18 @@
 general:
-  save_name: "_v2_train_example"
+  save_name: "enscale_published"
   server: "ada"
   save_dir_root_local: "results"
   save_dir_root_server: "/cluster/work/math/climate-downscaling/cordex-data/cordex-ALPS-allyear/eng-results"
   # Optional: override the default save-dir layout.
-  # save_dir_pattern: "{method}/super/{subfolder}/var-{variables}/hidden{hidden_dim}_num-l-{num_layer}_layer-shr-{layer_shrinkage}_avc-c-{avg_constraint}_norm-out-{norm_method_output}{save_name}/"
+  # save_dir_pattern: "coarse/var-{variables}/hd-{hidden_dim}_num-lay-{num_layer}_norm-out-{norm_method_output}{save_name}/"
+save_dir_pattern: coarse/var-{variables}/{save_name}/
 
 data:
   type: cordex_ensemble
   variables: ["tas", "pr", "sfcWind", "rsds"]
-  variables_lr: ["pr"]
+  variables_lr: ["tas", "pr", "sfcWind", "rsds", "psl"]
   kernel_size_lr: 16
-  kernel_size_hr: 8
+  kernel_size_hr: 16
   return_timepair: false
   random_state: 42
   data_dir: "/r/scratch/groups/nm/downscaling/cordex-ALPS-allyear"
@@ -32,7 +33,7 @@ data:
 
   runs:
     selection: first_n
-    n_models: 1
+    n_models: 8
 
   ensemble_encoding:
     enabled: true
@@ -49,7 +50,7 @@ data:
     norm_method_input: "normalise_scalar"
     norm_method_output: "uniform"
     fft: false
-    normal_transform: true
+    normal_transform: false
     logit_transform: false
     clip_quantile: null
     flip_latitude: true
@@ -76,18 +77,18 @@ data:
 model:
   method: "eng_2step"
   conv: false
-  nicolai_layers: true
+  nicolai_layers: false
   conv_concat: false
   conv_dim: 16
-  hidden_dim: 12
-  layer_shrinkage: 16
-  noise_dim: 100
+  hidden_dim: 200
+  layer_shrinkage: 1
+  noise_dim: 10
   dropout: false
   noise_std: 1.0
   out_act: null
   num_layer: 6
-  preproc_layer: false
-  preproc_dim: 20
+  preproc_layer: true
+  preproc_dim: 50
   mlp: true
   bn: false
   one_hot_in_super: true
@@ -126,7 +127,7 @@ sparse_layers:
   not_split_residuals: true
 
 training:
-  batch_size: 512
+  batch_size: 1024
   num_epochs: 500
   lr: 1e-4
   weight_decay: 1e-3
